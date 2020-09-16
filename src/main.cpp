@@ -5,22 +5,15 @@
    $Creator: Connor Haskins $
    ======================================================================== */
 
-
-#include <iostream>
-
-#include "HelloTriangleApplication.h"
+#include "VulkanApp.cpp"
 
 int main() {
-    
-    HelloTriangleApplication app;
-
     try {
-        app.run();
+        runVulkanApp();
     } catch (const std::exception& e) {
         std::cerr << e.what() << std::endl;
         return EXIT_FAILURE;
     }
 
     return EXIT_SUCCESS;
-}
-
+} 

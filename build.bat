@@ -19,7 +19,7 @@ REM FC - Display full path of source code files passed to compiler in diagnostic
 REM Z7 - Produce object files that also contain full symbolic debugging information for use with a debugger
 set IncludePath=C:/developer/dependencies/include
 set LibraryPath=C:/developer/dependencies/libs
-set CommonCompilerOptions=-MDd -nologo -fp:fast -GR -EHa -Od -Oi -WX -W4 -wd4201 -wd4505 -wd4100 -wd4189 -wd4530 -wd4324 -FC -Z7 -I%IncludePath%
+set CommonCompilerOptions=-MDd -nologo -fp:fast -GR -EHa -Od -Oi -WX -W4 -wd4201 -wd4505 -wd4100 -wd4189 -wd4530 -wd4324 -FC -Z7 -I%IncludePath% -NOT_DEBUG=0
 REM incremental:no - Disables incremental linking
 REM opt:Ref - eliminates functions and data that are never referenced
 
