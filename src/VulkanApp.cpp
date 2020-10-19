@@ -55,19 +55,12 @@ struct VulkanContext {
     VkFence* inFlightFences;
     VkFence* imagesInFlight;
 
-    // Vertex buffer and attributes
-    struct {
-        VkDeviceMemory memory; // Handle to the device memory for this buffer
-        VkBuffer buffer;       // Handle to the Vulkan buffer object that the memory is bound to
-    } vertices;
-
-    // Index buffer
     struct {
         VkDeviceMemory memory;
         VkBuffer buffer;
-        uint32 count;
-    } indices;
-
+        uint32 verticesOffset;
+        uint32 indicesOffset;
+    } vertexAtt;
 };
 
 // Vertex layout used in this example
@@ -75,6 +68,28 @@ struct Vertex {
     real32 position[3];
     real32 color[3];
 };
+
+const Vertex vertexData[] =
+{
+    { // VERTEX
+        {  0.0f, -0.5f,  0.0f }, // POSITION
+        {  1.0f,  0.0f,  0.0f }  // COLOR
+    },
+    {
+        {  0.5f,  0.5f,  0.0f },
+        {  0.0f,  1.0f,  0.0f }
+    },
+    {
+        { -0.5f,  0.5f,  0.0f },
+        {  0.0f,  0.0f,  1.0f }
+    }
+};
+const uint32 vertexCount = ArrayCount(vertexData);
+const uint32 vertexDataSize = ArrayCount(vertexData) * sizeof(Vertex);
+
+const uint32 indexData[] = { 0, 1, 2 };
+const uint32 indexCount = ArrayCount(indexData);
+const uint32 indexDataSize = (indexCount) * sizeof(uint32);
 
 void initWindow(GLFWwindow** window);
 void initVulkan(GLFWwindow* window,VulkanContext* vulkanContext);
@@ -98,6 +113,7 @@ void DestroyDebugUtilsMessengerEXT(VkInstance* instance, VkDebugUtilsMessengerEX
 bool32 findQueueFamilies(VkSurfaceKHR* surface, VkPhysicalDevice* device, QueueFamilyIndices* queueFamilyIndices);
 void drawFrame(VulkanContext* vulkanContext);
 void getRequiredExtensions(const char ** extensions, uint32 *extensionCount);
+void processKeyboardInput(GLFWwindow* window);
 
 const uint32 WIDTH = 800;
 const uint32 HEIGHT = 600;
@@ -152,17 +168,17 @@ void mainLoop(GLFWwindow* window, VulkanContext* vulkanContext) {
             vkCmdBindVertexBuffers(vulkanContext->commandBuffers[i],
                                    0 /*First binding index as described by VkVertexInputBindingDescription.binding*/,
                                    1 /*Vertex buffer count*/,
-                                   &vulkanContext->vertices.buffer /*Vertex buffer array*/,
+                                   &vulkanContext->vertexAtt.buffer /*Vertex buffer array*/,
                                    bufferOffsets /*offset of vertex attributes in the array of buffers*/);
 
             // Bind triangle index buffer
             vkCmdBindIndexBuffer(vulkanContext->commandBuffers[i],
-                                 vulkanContext->indices.buffer,
-                                 0/*offset in buffer*/,
+                                 vulkanContext->vertexAtt.buffer,
+                                 vertexDataSize/*offset in buffer*/,
                                  VK_INDEX_TYPE_UINT32);
 
             // Draw indexed triangle
-            vkCmdDrawIndexed(vulkanContext->commandBuffers[i], vulkanContext->indices.count, 1, 0, 0, 1);
+            vkCmdDrawIndexed(vulkanContext->commandBuffers[i], indexCount, 1, 0, 0, 1);
         }
         vkCmdEndRenderPass(vulkanContext->commandBuffers[i]);
 
@@ -172,11 +188,19 @@ void mainLoop(GLFWwindow* window, VulkanContext* vulkanContext) {
     }
     
     while (!glfwWindowShouldClose(window)) {
-        glfwPollEvents();
+        processKeyboardInput(window);
         drawFrame(vulkanContext);
+        glfwPollEvents();
     }
 
     vkDeviceWaitIdle(vulkanContext->logicalDevice);
+}
+
+void processKeyboardInput(GLFWwindow* window) { 
+  if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS)
+  {
+    glfwSetWindowShouldClose(window, true);
+  }
 }
 
 void drawFrame(VulkanContext* vulkanContext) {
@@ -549,39 +573,15 @@ uint32 getMemoryTypeIndex(VkPhysicalDeviceMemoryProperties* deviceMemoryProperti
 void initVertexAttributes(VulkanContext* vulkanContext)
 {
     VkDevice device = vulkanContext->logicalDevice;
-    VkDeviceMemory* vertexMemory = &vulkanContext->vertices.memory;
-    VkBuffer* vertexBuffer = &vulkanContext->vertices.buffer;
-    VkDeviceMemory* indexMemory = &vulkanContext->indices.memory;
-    VkBuffer* indexBuffer = &vulkanContext->indices.buffer;
-    uint32* indexCount = &vulkanContext->indices.count;
+    VkDeviceMemory* vertexAttMemory = &vulkanContext->vertexAtt.memory;
+    VkBuffer* vertexAttBuffer = &vulkanContext->vertexAtt.buffer;
+    uint32* indexBufferOffset = &vulkanContext->vertexAtt.indicesOffset;
+    uint32* vertexBufferOffset = &vulkanContext->vertexAtt.verticesOffset;
     VkPhysicalDeviceMemoryProperties* deviceMemoryProperties = &vulkanContext->deviceMemoryProperties;
     
     // A note on memory management in Vulkan in general:
     //  This is a very complex topic and while it's fine for an example application to small individual memory allocations that is not
     //  what should be done a real-world application, where you should allocate large chunks of memory at once instead.
-
-    // Setup vertices
-    Vertex vertexData[] =
-        {
-            { // VERTEX
-                {  0.0f, -0.5f,  0.0f }, // POSITION
-                {  1.0f,  0.0f,  0.0f }  // COLOR
-            },
-            {
-                {  0.5f,  0.5f,  0.0f },
-                {  0.0f,  1.0f,  0.0f }
-            },
-            {
-                { -0.5f,  0.5f,  0.0f },
-                {  0.0f,  0.0f,  1.0f }
-            }
-        };
-    uint32 vertexBufferSize = ArrayCount(vertexData) * sizeof(Vertex);
-
-    // Setup indices
-    uint32 indexData[] = { 0, 1, 2 };
-    *indexCount = ArrayCount(indexData);
-    uint32 indexBufferSize = (*indexCount) * sizeof(uint32);
     
     // Static data like vertex and index buffer should be stored on the device memory
     // for optimal (and fastest) access by the GPU
@@ -594,89 +594,62 @@ void initVertexAttributes(VulkanContext* vulkanContext)
     // - Delete the host visible (staging) buffer
     // - Use the device local buffers for rendering
 
+    uint32 totalBufferSize = vertexDataSize + indexDataSize;
+    
     // Create a host-visible buffer to copy the vertex data to (staging buffer)
     VkBufferCreateInfo hostVisibleVertexBufferInfo = {};
     hostVisibleVertexBufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-    hostVisibleVertexBufferInfo.size = vertexBufferSize;
+    hostVisibleVertexBufferInfo.size = totalBufferSize;
     hostVisibleVertexBufferInfo.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT; // Buffer is used as the copy source
 
     VkBuffer stagingVertexBuffer;
     vkCreateBuffer(device, &hostVisibleVertexBufferInfo, nullAllocator, &stagingVertexBuffer);
     
-    VkMemoryRequirements vertexBufferMemReqs;
-    vkGetBufferMemoryRequirements(device, stagingVertexBuffer, &vertexBufferMemReqs);
+    VkMemoryRequirements vertexAttBufferMemReqs;
+    vkGetBufferMemoryRequirements(device, stagingVertexBuffer, &vertexAttBufferMemReqs);
     
-    VkMemoryAllocateInfo vertexBufferMemAllocInfo = {};
-    vertexBufferMemAllocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-    vertexBufferMemAllocInfo.allocationSize = vertexBufferMemReqs.size;
-    vertexBufferMemAllocInfo.memoryTypeIndex = getMemoryTypeIndex(deviceMemoryProperties, vertexBufferMemReqs.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    VkMemoryAllocateInfo vertexAttBufferMemAllocInfo = {};
+    vertexAttBufferMemAllocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    vertexAttBufferMemAllocInfo.allocationSize = vertexAttBufferMemReqs.size;
+    vertexAttBufferMemAllocInfo.memoryTypeIndex = getMemoryTypeIndex(deviceMemoryProperties, vertexAttBufferMemReqs.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
 
     VkDeviceMemory stagingVertexMemory;
-    vkAllocateMemory(device, &vertexBufferMemAllocInfo, nullAllocator, &stagingVertexMemory);
+    vkAllocateMemory(device, &vertexAttBufferMemAllocInfo, nullAllocator, &stagingVertexMemory);
 
     // Map staging memory and copy to staging buffer
     void *stagingVertexMemoryCopyPtr;
-    vkMapMemory(device, stagingVertexMemory, 0/*offset*/, vertexBufferMemAllocInfo.allocationSize, 0/*flags*/, &stagingVertexMemoryCopyPtr);
-    memcpy(stagingVertexMemoryCopyPtr, vertexData, vertexBufferSize);
+    *vertexBufferOffset = 0;
+    vkMapMemory(device, stagingVertexMemory, *vertexBufferOffset, vertexAttBufferMemAllocInfo.allocationSize, 0/*flags*/, &stagingVertexMemoryCopyPtr);
+    memcpy(stagingVertexMemoryCopyPtr, vertexData, vertexDataSize);
     stagingVertexMemoryCopyPtr = nullptr;
     vkUnmapMemory(device, stagingVertexMemory);
-    vkBindBufferMemory(device, stagingVertexBuffer, stagingVertexMemory, 0);
 
+    // repeat above for index data
+    void *stagingIndexMemoryCopyPtr;
+    *indexBufferOffset = vertexDataSize;
+    vkMapMemory(device, stagingVertexMemory, *indexBufferOffset, indexDataSize, 0, &stagingIndexMemoryCopyPtr);
+    memcpy(stagingIndexMemoryCopyPtr, indexData, indexDataSize);
+    stagingIndexMemoryCopyPtr = nullptr;
+    vkUnmapMemory(device, stagingVertexMemory);
+    
+    vkBindBufferMemory(device, stagingVertexBuffer, stagingVertexMemory, 0/*memory offset*/);
+    
     // Create destination buffer with device only visibility
     VkBufferCreateInfo deviceLocalVertexBufferInfo = {};
     deviceLocalVertexBufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-    deviceLocalVertexBufferInfo.size = vertexBufferSize;
-    deviceLocalVertexBufferInfo.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT; // device local buffer to  be used for rendering
+    deviceLocalVertexBufferInfo.size = totalBufferSize;
+    // TODO: Performance test to check if using VK_BUFFER_USAGE_VERTEX_BUFFER_BIT & VK_BUFFER_USAGE_INDEX_BUFFER_BIT
+    // slows us down due to driver implementation using these flags
+    deviceLocalVertexBufferInfo.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT; // device local buffer to  be used for rendering
     
-    vkCreateBuffer(device, &deviceLocalVertexBufferInfo, nullAllocator, vertexBuffer);
+    vkCreateBuffer(device, &deviceLocalVertexBufferInfo, nullAllocator, vertexAttBuffer);
 
-    vkGetBufferMemoryRequirements(device, *vertexBuffer, &vertexBufferMemReqs);
-    vertexBufferMemAllocInfo.allocationSize = vertexBufferMemReqs.size; 
-    vertexBufferMemAllocInfo.memoryTypeIndex = getMemoryTypeIndex(deviceMemoryProperties, vertexBufferMemReqs.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-    vkAllocateMemory(device, &vertexBufferMemAllocInfo, nullAllocator, vertexMemory);
-    vkBindBufferMemory(device, *vertexBuffer, *vertexMemory, 0);
+    vkGetBufferMemoryRequirements(device, *vertexAttBuffer, &vertexAttBufferMemReqs);
+    vertexAttBufferMemAllocInfo.allocationSize = vertexAttBufferMemReqs.size; 
+    vertexAttBufferMemAllocInfo.memoryTypeIndex = getMemoryTypeIndex(deviceMemoryProperties, vertexAttBufferMemReqs.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    vkAllocateMemory(device, &vertexAttBufferMemAllocInfo, nullAllocator, vertexAttMemory);
 
-    // repeat above for index data
-    VkBufferCreateInfo hostVisibleIndexBufferInfo = {};
-    hostVisibleIndexBufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-    hostVisibleIndexBufferInfo.size = indexBufferSize;
-    hostVisibleIndexBufferInfo.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
-    
-    VkBuffer stagingIndexBuffer;
-    vkCreateBuffer(device, &hostVisibleIndexBufferInfo, nullAllocator, &stagingIndexBuffer);
-
-    VkMemoryRequirements indexBufferMemReqs;
-    vkGetBufferMemoryRequirements(device, stagingIndexBuffer, &indexBufferMemReqs);
-    
-    VkMemoryAllocateInfo indexBufferMemAllocInfo = {};
-    indexBufferMemAllocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-    indexBufferMemAllocInfo.allocationSize = indexBufferMemReqs.size;
-    indexBufferMemAllocInfo.memoryTypeIndex = getMemoryTypeIndex(deviceMemoryProperties, indexBufferMemReqs.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-
-    VkDeviceMemory stagingIndexMemory;
-    vkAllocateMemory(device, &indexBufferMemAllocInfo, nullAllocator, &stagingIndexMemory);
-
-    vkBindBufferMemory(device, stagingIndexBuffer, stagingIndexMemory, 0);
-    
-    void *stagingIndexMemoryCopyPtr;
-    vkMapMemory(device, stagingIndexMemory, 0, indexBufferMemAllocInfo.allocationSize, 0, &stagingIndexMemoryCopyPtr);
-    memcpy(stagingIndexMemoryCopyPtr, indexData, indexBufferSize);
-    stagingIndexMemoryCopyPtr = nullptr;
-    vkUnmapMemory(device, stagingIndexMemory);
-
-    VkBufferCreateInfo deviceLocalIndexBufferInfo = {};
-    deviceLocalIndexBufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-    deviceLocalIndexBufferInfo.size = indexBufferSize;
-    deviceLocalIndexBufferInfo.usage = VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
-    
-    vkCreateBuffer(device, &deviceLocalIndexBufferInfo, nullAllocator, indexBuffer);
-
-    vkGetBufferMemoryRequirements(device, *indexBuffer, &indexBufferMemReqs);
-    indexBufferMemAllocInfo.allocationSize = indexBufferMemReqs.size;
-    indexBufferMemAllocInfo.memoryTypeIndex = getMemoryTypeIndex(deviceMemoryProperties, indexBufferMemReqs.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-    vkAllocateMemory(device, &indexBufferMemAllocInfo, nullAllocator, indexMemory);
-    
-    vkBindBufferMemory(device, *indexBuffer, *indexMemory, 0);
+    vkBindBufferMemory(device, *vertexAttBuffer, *vertexAttMemory, 0);
 
     // Buffer copies have to be submitted to a queue, so we need a command buffer
     VkCommandBufferAllocateInfo commandBufferAllocateInfo = {};
@@ -697,17 +670,13 @@ void initVertexAttributes(VulkanContext* vulkanContext)
         throw std::runtime_error("failed to begin recording command buffer for staging vertex/index buffers !");
     }
 
-    // TODO: Use the same buffer and memory chunk for both vertex & index data
     // Put buffer region copies into command buffer
     VkBufferCopy copyRegion;
     copyRegion.srcOffset = 0;
     copyRegion.dstOffset = 0;
     // Vertex buffer
-    copyRegion.size = vertexBufferSize;
-    vkCmdCopyBuffer(copyCommandBuffer, stagingVertexBuffer, *vertexBuffer, 1/* region count */, &copyRegion);
-    // Index buffer
-    copyRegion.size = indexBufferSize;
-    vkCmdCopyBuffer(copyCommandBuffer, stagingIndexBuffer, *indexBuffer, 1, &copyRegion);
+    copyRegion.size = totalBufferSize;
+    vkCmdCopyBuffer(copyCommandBuffer, stagingVertexBuffer, *vertexAttBuffer, 1/* region count */, &copyRegion);
 
     vkEndCommandBuffer(copyCommandBuffer);
 
@@ -736,8 +705,6 @@ void initVertexAttributes(VulkanContext* vulkanContext)
     // Note: Staging buffer must not be deleted before the copies have been submitted and executed
     vkDestroyBuffer(device, stagingVertexBuffer, nullAllocator);
     vkFreeMemory(device, stagingVertexMemory, nullAllocator);
-    vkDestroyBuffer(device, stagingIndexBuffer, nullAllocator);
-    vkFreeMemory(device, stagingIndexMemory, nullAllocator);
 }
 
 void initGraphicsPipeline(VkDevice* logicalDevice, VkExtent2D* extent, VkPipelineLayout* pipelineLayout, VkRenderPass* renderPass, VkPipeline* graphicsPipeline) {
@@ -1245,10 +1212,8 @@ void cleanup(GLFWwindow* window, VulkanContext* vulkanContext) {
         vkDestroyFence(vulkanContext->logicalDevice, vulkanContext->inFlightFences[i], nullAllocator);
     }
 
-    vkDestroyBuffer(vulkanContext->logicalDevice, vulkanContext->vertices.buffer, nullAllocator);
-    vkFreeMemory(vulkanContext->logicalDevice, vulkanContext->vertices.memory, nullAllocator);
-    vkDestroyBuffer(vulkanContext->logicalDevice, vulkanContext->indices.buffer, nullAllocator);
-    vkFreeMemory(vulkanContext->logicalDevice, vulkanContext->indices.memory, nullAllocator);
+    vkDestroyBuffer(vulkanContext->logicalDevice, vulkanContext->vertexAtt.buffer, nullAllocator);
+    vkFreeMemory(vulkanContext->logicalDevice, vulkanContext->vertexAtt.memory, nullAllocator);
     vkDestroyRenderPass(vulkanContext->logicalDevice, vulkanContext->renderPass, nullAllocator);
     vkDestroyPipeline(vulkanContext->logicalDevice, vulkanContext->graphicsPipeline, nullAllocator);
     vkDestroyPipelineLayout(vulkanContext->logicalDevice, vulkanContext->pipelineLayout, nullAllocator);
