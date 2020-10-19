@@ -5,7 +5,9 @@
    $Creator: Connor Haskins $
    ======================================================================== */
 
-#include "VulkanApp.cpp"
+#include "VulkanApp.h"
+#include <stdexcept>
+#include <iostream>
 
 int main() {
     try {

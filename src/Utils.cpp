@@ -7,6 +7,7 @@
 #pragma once
 
 #include <fstream>
+#include "Platform.h"
 
 static void readFile(const char* filename, uint32* fileSize, char* fileBuffer) {
     // Read at end to get file size

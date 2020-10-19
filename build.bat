@@ -1,9 +1,8 @@
-@echo off
-
-REM compile shaders to SPIR-V
+@REM compile shaders to SPIR-V
 C:/VulkanSDK/1.2.141.2/Bin32/glslc.exe src/shaders/test_vertex_shader.vert -o build/vert.spv
 C:/VulkanSDK/1.2.141.2/Bin32/glslc.exe src/shaders/test_fragment_shader.frag -o build/frag.spv
 
+@echo off
 REM MTd - Application will use the multithread, static version of the run-time library. Uses LIBCMTD.lib to resolve symbols. Debug version.
 REM MDd - Application will use the multithread-specific and DLL-specific version of the run-time library. Uses MSVCRT.lib to resolve symbols. Debug version.
 REM nologo - Surpresses display of copyright bannerwhen compiler stars up
@@ -35,7 +34,7 @@ pushd build
 
 REM Fm - Tells linker to produce a mapfile
 @echo on
-cl %CommonCompilerOptions% ../src/main.cpp -Fmmain.map /link %CommonLinkerOptions%
+cl %CommonCompilerOptions% ../src/*.cpp -Fmmain.map /link %CommonLinkerOptions%
 @echo off
 REM popd: pop previously saved dir
 popd

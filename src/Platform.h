@@ -21,6 +21,7 @@ typedef double real64;
 #define ArrayCount(Array) (sizeof(Array) / sizeof((Array)[0]))
 #define min(x, y) (x < y ? x : y)
 #define max(x, y) (x > y ? x : y)
+#define clamp(lowerBound, upperBound, desiredVal) (desiredVal < lowerBound ? lowerBound : (desiredVal > upperBound ? upperBound : desiredVal))
 
 #define local_persist static
 #define global_variable static
