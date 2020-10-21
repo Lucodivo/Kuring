@@ -8,6 +8,7 @@
 #include "VulkanApp.h"
 #include "Platform.h"
 #include "Utils.cpp"
+#include "Models.h"
 
 #define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
@@ -63,34 +64,6 @@ struct VulkanContext {
     } vertexAtt;
 };
 
-// Vertex layout used in this example
-struct Vertex {
-    real32 position[3];
-    real32 color[3];
-};
-
-const Vertex vertexData[] =
-{
-    { // VERTEX
-        {  0.0f, -0.5f,  0.0f }, // POSITION
-        {  1.0f,  0.0f,  0.0f }  // COLOR
-    },
-    {
-        {  0.5f,  0.5f,  0.0f },
-        {  0.0f,  1.0f,  0.0f }
-    },
-    {
-        { -0.5f,  0.5f,  0.0f },
-        {  0.0f,  0.0f,  1.0f }
-    }
-};
-const uint32 vertexCount = ArrayCount(vertexData);
-const uint32 vertexDataSize = ArrayCount(vertexData) * sizeof(Vertex);
-
-const uint32 indexData[] = { 0, 1, 2 };
-const uint32 indexCount = ArrayCount(indexData);
-const uint32 indexDataSize = (indexCount) * sizeof(uint32);
-
 void initWindow(GLFWwindow** window);
 void initVulkan(GLFWwindow* window,VulkanContext* vulkanContext);
 bool32 checkValidationLayerSupport();
@@ -115,8 +88,8 @@ void drawFrame(VulkanContext* vulkanContext);
 void getRequiredExtensions(const char ** extensions, uint32 *extensionCount);
 void processKeyboardInput(GLFWwindow* window);
 
-const uint32 WIDTH = 800;
-const uint32 HEIGHT = 600;
+const uint32 WIDTH = 1200;
+const uint32 HEIGHT = 1200;
 const uint32 MAX_FRAMES_IN_FLIGHT = 2;
 const uint32 VERTEX_INPUT_BINDING_INDEX = 0;
 const uint64 DEFAULT_FENCE_TIMEOUT = 100000000000;
@@ -174,11 +147,11 @@ void mainLoop(GLFWwindow* window, VulkanContext* vulkanContext) {
             // Bind triangle index buffer
             vkCmdBindIndexBuffer(vulkanContext->commandBuffers[i],
                                  vulkanContext->vertexAtt.buffer,
-                                 vertexDataSize/*offset in buffer*/,
+                                 fullScreenQuadVertexAttDataSize/*offset in buffer*/,
                                  VK_INDEX_TYPE_UINT32);
 
             // Draw indexed triangle
-            vkCmdDrawIndexed(vulkanContext->commandBuffers[i], indexCount, 1, 0, 0, 1);
+            vkCmdDrawIndexed(vulkanContext->commandBuffers[i], fullScreenQuadIndexCount, 1, 0, 0, 1);
         }
         vkCmdEndRenderPass(vulkanContext->commandBuffers[i]);
 
@@ -204,21 +177,23 @@ void processKeyboardInput(GLFWwindow* window) {
 }
 
 void drawFrame(VulkanContext* vulkanContext) {
+    // TODO: triggered by what?
     vkWaitForFences(vulkanContext->logicalDevice, 1, &vulkanContext->inFlightFences[vulkanContext->currentFrame], VK_TRUE, UINT64_MAX);
+    vkResetFences(vulkanContext->logicalDevice, 1, &vulkanContext->inFlightFences[vulkanContext->currentFrame]);
     
     uint32 imageIndex; // index inside swapChain.images
     vkAcquireNextImageKHR(vulkanContext->logicalDevice,
                           vulkanContext->swapChain.handle,
                           UINT64_MAX,
-                          vulkanContext->imageAvailableSemaphores[vulkanContext->currentFrame],
-                          VK_NULL_HANDLE,
+                          vulkanContext->imageAvailableSemaphores[vulkanContext->currentFrame]/*get informed when image becomes available after presentation*/,
+                          VK_NULL_HANDLE /*fence signal*/,
                           &imageIndex);
 
     if(vulkanContext->imagesInFlight[imageIndex] != VK_NULL_HANDLE) {
+        // TODO: triggered by what?
         vkWaitForFences(vulkanContext->logicalDevice, 1, &vulkanContext->imagesInFlight[imageIndex], VK_TRUE, UINT64_MAX);
     }
     vulkanContext->imagesInFlight[imageIndex] = vulkanContext->inFlightFences[vulkanContext->currentFrame];
-    vkResetFences(vulkanContext->logicalDevice, 1, &vulkanContext->inFlightFences[vulkanContext->currentFrame]);
     
     VkSemaphore waitSemaphores[] = {vulkanContext->imageAvailableSemaphores[vulkanContext->currentFrame]}; // which semaphores to wait for
     VkPipelineStageFlags waitStages[] = {VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT}; // what stages of the corresponding semaphores to wait for
@@ -226,23 +201,23 @@ void drawFrame(VulkanContext* vulkanContext) {
     
     VkSubmitInfo submitInfo{};
     submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-    submitInfo.waitSemaphoreCount = 1;
-    submitInfo.pWaitSemaphores = waitSemaphores;
-    submitInfo.pWaitDstStageMask = waitStages;
     submitInfo.commandBufferCount = 1;
     submitInfo.pCommandBuffers = &vulkanContext->commandBuffers[imageIndex];
-    submitInfo.signalSemaphoreCount = 1;
-    submitInfo.pSignalSemaphores = signalSemaphores;
+    submitInfo.pWaitDstStageMask = waitStages;
+    submitInfo.waitSemaphoreCount = ArrayCount(waitSemaphores);
+    submitInfo.pWaitSemaphores = waitSemaphores; // Ensure that the image has been presented before we modify it
+    submitInfo.signalSemaphoreCount = ArrayCount(signalSemaphores);
+    submitInfo.pSignalSemaphores = signalSemaphores; // signal when the queues work has been completed
 
     if (vkQueueSubmit(vulkanContext->graphicsQueue, 1, &submitInfo,
-                      vulkanContext->inFlightFences[vulkanContext->currentFrame] /* signaled on completion of all submitted command bufers */
+                      vulkanContext->inFlightFences[vulkanContext->currentFrame] /* signaled on completion of all submitted command buffers */
                       ) != VK_SUCCESS) {
         throw std::runtime_error("failed to submit draw command buffer!");
     }
     
     VkPresentInfoKHR presentInfo{};
     presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
-    presentInfo.waitSemaphoreCount = 1;
+    presentInfo.waitSemaphoreCount = ArrayCount(signalSemaphores);
     presentInfo.pWaitSemaphores = signalSemaphores;
     presentInfo.swapchainCount = 1;
     presentInfo.pSwapchains = &vulkanContext->swapChain.handle;
@@ -594,7 +569,7 @@ void initVertexAttributes(VulkanContext* vulkanContext)
     // - Delete the host visible (staging) buffer
     // - Use the device local buffers for rendering
 
-    uint32 totalBufferSize = vertexDataSize + indexDataSize;
+    uint32 totalBufferSize = fullScreenQuadVertexAttDataSize + fullScreenQuadIndexDataSize;
     
     // Create a host-visible buffer to copy the vertex data to (staging buffer)
     VkBufferCreateInfo hostVisibleVertexBufferInfo = {};
@@ -620,15 +595,15 @@ void initVertexAttributes(VulkanContext* vulkanContext)
     void *stagingVertexMemoryCopyPtr;
     *vertexBufferOffset = 0;
     vkMapMemory(device, stagingVertexMemory, *vertexBufferOffset, vertexAttBufferMemAllocInfo.allocationSize, 0/*flags*/, &stagingVertexMemoryCopyPtr);
-    memcpy(stagingVertexMemoryCopyPtr, vertexData, vertexDataSize);
+    memcpy(stagingVertexMemoryCopyPtr, fullScreenQuadVertexAttData, fullScreenQuadVertexAttDataSize);
     stagingVertexMemoryCopyPtr = nullptr;
     vkUnmapMemory(device, stagingVertexMemory);
 
     // repeat above for index data
     void *stagingIndexMemoryCopyPtr;
-    *indexBufferOffset = vertexDataSize;
-    vkMapMemory(device, stagingVertexMemory, *indexBufferOffset, indexDataSize, 0, &stagingIndexMemoryCopyPtr);
-    memcpy(stagingIndexMemoryCopyPtr, indexData, indexDataSize);
+    *indexBufferOffset = fullScreenQuadVertexAttDataSize;
+    vkMapMemory(device, stagingVertexMemory, *indexBufferOffset, fullScreenQuadIndexDataSize, 0, &stagingIndexMemoryCopyPtr);
+    memcpy(stagingIndexMemoryCopyPtr, fullScreenQuadIndexData, fullScreenQuadIndexDataSize);
     stagingIndexMemoryCopyPtr = nullptr;
     vkUnmapMemory(device, stagingVertexMemory);
     
@@ -760,7 +735,7 @@ void initGraphicsPipeline(VkDevice* logicalDevice, VkExtent2D* extent, VkPipelin
     VkVertexInputBindingDescription vertexInputBindingDesc = {};
     // the binding point index is used when describing the attributes and when binding vertex buffers with draw commands
     vertexInputBindingDesc.binding = VERTEX_INPUT_BINDING_INDEX;
-    vertexInputBindingDesc.stride = sizeof(Vertex);
+    vertexInputBindingDesc.stride = sizeof(PosColVertexAtt);
     vertexInputBindingDesc.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
 
     // Input attribute bindings describe shader attribute locations and memory layouts
@@ -772,7 +747,7 @@ void initGraphicsPipeline(VkDevice* logicalDevice, VkExtent2D* extent, VkPipelin
     vertexInputAttributes[0].location = 0;
     // Position attr is three 32 bit signed (SFLOAT) floats (R32 G32 B32)
     vertexInputAttributes[0].format = VK_FORMAT_R32G32B32_SFLOAT;
-    vertexInputAttributes[0].offset = offsetof(Vertex, position);
+    vertexInputAttributes[0].offset = offsetof(PosColVertexAtt, position);
         
     // Attribute location 1: Color
     // GLSL: layout (location = 1) in vec3 inColor;
@@ -780,7 +755,7 @@ void initGraphicsPipeline(VkDevice* logicalDevice, VkExtent2D* extent, VkPipelin
     vertexInputAttributes[1].location = 1;
     // Color attr is three 32 bit signed (SFLOAT) floats (R32 G32 B32)
     vertexInputAttributes[1].format = VK_FORMAT_R32G32B32_SFLOAT;
-    vertexInputAttributes[1].offset = offsetof(Vertex, color);
+    vertexInputAttributes[1].offset = offsetof(PosColVertexAtt, color);
 
     // Vertex input state used for pipeline creation
     VkPipelineVertexInputStateCreateInfo vertexInputStateCI = {};
