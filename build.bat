@@ -25,8 +25,7 @@ set LibraryPath=C:/developer/dependencies/libs
 set CommonCompilerOptions=-MDd -nologo -fp:fast -GR -EHa -Od -Oi -WX -W4 -wd4201 -wd4505 -wd4100 -wd4189 -wd4530 -wd4324 -FC -Z7 -I%IncludePath% -NOT_DEBUG=0
 REM incremental:no - Disables incremental linking
 REM opt:Ref - eliminates functions and data that are never referenced
-
-set CommonLinkerOptions= -incremental:no -opt:ref gdi32.lib opengl32.lib kernel32.lib user32.lib shell32.lib /LIBPATH:%LibraryPath% glfw3-x64-d.lib vulkan-1.lib
+set CommonLinkerOptions= -incremental:no -opt:ref gdi32.lib kernel32.lib user32.lib shell32.lib /LIBPATH:%LibraryPath% glfw3-x64-d.lib vulkan-1.lib
 
 IF NOT EXIST build mkdir build
 REM pushd: cd and save previous dir
