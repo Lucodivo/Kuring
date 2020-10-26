@@ -43,6 +43,7 @@ struct VulkanContext {
     VkQueue presentQueue;
     VkQueue transferQueue;
     VkSurfaceKHR surface;
+    VkExtent2D viewportExtent;
     SwapChain swapChain;
     VkRenderPass renderPass;
     VkPipelineLayout pipelineLayout;
@@ -50,12 +51,13 @@ struct VulkanContext {
     VkCommandPool commandPool;
     uint32 commandBufferCount;
     VkCommandBuffer* commandBuffers;
-    VkSemaphore* imageAvailableSemaphores;
-    VkSemaphore* renderFinishedSemaphores;
-    uint32 currentFrame;
-    VkFence* inFlightFences;
-    VkFence* imagesInFlight;
-
+    VkFence* commandBufferFences;
+    
+    struct{
+        VkSemaphore present;
+        VkSemaphore render;
+    } semaphores;
+    
     struct {
         VkDeviceMemory memory;
         VkBuffer buffer;
@@ -64,7 +66,7 @@ struct VulkanContext {
     } vertexAtt;
 };
 
-void initWindow(GLFWwindow** window);
+void initGLFW(GLFWwindow** window, VulkanContext* vulkanContext);
 void initVulkan(GLFWwindow* window,VulkanContext* vulkanContext);
 bool32 checkValidationLayerSupport();
 void initVulkanInstance(VkInstance* instance, VkDebugUtilsMessengerEXT* debugMessenger);
@@ -88,9 +90,8 @@ void drawFrame(VulkanContext* vulkanContext);
 void getRequiredExtensions(const char ** extensions, uint32 *extensionCount);
 void processKeyboardInput(GLFWwindow* window);
 
-const uint32 WIDTH = 1200;
-const uint32 HEIGHT = 1200;
-const uint32 MAX_FRAMES_IN_FLIGHT = 2;
+const uint32 INITIAL_VIEWPORT_WIDTH = 1200;
+const uint32 INITIAL_VIEWPORT_HEIGHT = 1200;
 const uint32 VERTEX_INPUT_BINDING_INDEX = 0;
 const uint64 DEFAULT_FENCE_TIMEOUT = 100000000000;
 
@@ -103,8 +104,8 @@ bool32 enableValidationLayers = true;
 const char* VALIDATION_LAYERS[] = {"VK_LAYER_KHRONOS_validation"};
 const char* DEVICE_EXTENSIONS[] = {VK_KHR_SWAPCHAIN_EXTENSION_NAME};
 
-const char* VERT_SHADER_FILE_LOC = "vert.spv";
-const char* FRAG_SHADER_FILE_LOC = "frag.spv";
+const char* VERT_SHADER_FILE_LOC = "test_vertex_shader.vert.spv";
+const char* FRAG_SHADER_FILE_LOC = "test_fragment_shader.frag.spv";
 const char* APP_NAME = "Hello Vulkan";
 const char* ENGINE_NAME = "N/A";
 const VkAllocationCallbacks* nullAllocator = nullptr;
@@ -177,32 +178,26 @@ void processKeyboardInput(GLFWwindow* window) {
 }
 
 void drawFrame(VulkanContext* vulkanContext) {
-    // TODO: triggered by what?
-    vkWaitForFences(vulkanContext->logicalDevice, 1, &vulkanContext->inFlightFences[vulkanContext->currentFrame], VK_TRUE, UINT64_MAX);
-    vkResetFences(vulkanContext->logicalDevice, 1, &vulkanContext->inFlightFences[vulkanContext->currentFrame]);
-    
-    uint32 imageIndex; // index inside swapChain.images
+    uint32 bufferIndex; // index inside swapChain.images
     vkAcquireNextImageKHR(vulkanContext->logicalDevice,
                           vulkanContext->swapChain.handle,
                           UINT64_MAX,
-                          vulkanContext->imageAvailableSemaphores[vulkanContext->currentFrame]/*get informed when image becomes available after presentation*/,
+                          vulkanContext->semaphores.present/*get informed when presentation is complete*/,
                           VK_NULL_HANDLE /*fence signal*/,
-                          &imageIndex);
+                          &bufferIndex);
 
-    if(vulkanContext->imagesInFlight[imageIndex] != VK_NULL_HANDLE) {
-        // TODO: triggered by what?
-        vkWaitForFences(vulkanContext->logicalDevice, 1, &vulkanContext->imagesInFlight[imageIndex], VK_TRUE, UINT64_MAX);
-    }
-    vulkanContext->imagesInFlight[imageIndex] = vulkanContext->inFlightFences[vulkanContext->currentFrame];
+    vkWaitForFences(vulkanContext->logicalDevice, 1, &vulkanContext->commandBufferFences[bufferIndex], VK_TRUE, UINT64_MAX);
+    vkResetFences(vulkanContext->logicalDevice, 1, &vulkanContext->commandBufferFences[bufferIndex]);
     
-    VkSemaphore waitSemaphores[] = {vulkanContext->imageAvailableSemaphores[vulkanContext->currentFrame]}; // which semaphores to wait for
+    
+    VkSemaphore waitSemaphores[] = {vulkanContext->semaphores.present}; // which semaphores to wait for
     VkPipelineStageFlags waitStages[] = {VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT}; // what stages of the corresponding semaphores to wait for
-    VkSemaphore signalSemaphores[] = {vulkanContext->renderFinishedSemaphores[vulkanContext->currentFrame]}; // which semaphores to signal when completed
+    VkSemaphore signalSemaphores[] = {vulkanContext->semaphores.render}; // which semaphores to signal when completed
     
     VkSubmitInfo submitInfo{};
     submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
     submitInfo.commandBufferCount = 1;
-    submitInfo.pCommandBuffers = &vulkanContext->commandBuffers[imageIndex];
+    submitInfo.pCommandBuffers = &vulkanContext->commandBuffers[bufferIndex];
     submitInfo.pWaitDstStageMask = waitStages;
     submitInfo.waitSemaphoreCount = ArrayCount(waitSemaphores);
     submitInfo.pWaitSemaphores = waitSemaphores; // Ensure that the image has been presented before we modify it
@@ -210,7 +205,7 @@ void drawFrame(VulkanContext* vulkanContext) {
     submitInfo.pSignalSemaphores = signalSemaphores; // signal when the queues work has been completed
 
     if (vkQueueSubmit(vulkanContext->graphicsQueue, 1, &submitInfo,
-                      vulkanContext->inFlightFences[vulkanContext->currentFrame] /* signaled on completion of all submitted command buffers */
+                      vulkanContext->commandBufferFences[bufferIndex] /* signaled on completion of all submitted command buffers */
                       ) != VK_SUCCESS) {
         throw std::runtime_error("failed to submit draw command buffer!");
     }
@@ -221,12 +216,10 @@ void drawFrame(VulkanContext* vulkanContext) {
     presentInfo.pWaitSemaphores = signalSemaphores;
     presentInfo.swapchainCount = 1;
     presentInfo.pSwapchains = &vulkanContext->swapChain.handle;
-    presentInfo.pImageIndices = &imageIndex;
+    presentInfo.pImageIndices = &bufferIndex;
     presentInfo.pResults = nullptr; // returns a list of results to determine which swap chain may have failed
 
     vkQueuePresentKHR(vulkanContext->presentQueue, &presentInfo);
-
-    vulkanContext->currentFrame = (++vulkanContext->currentFrame) % MAX_FRAMES_IN_FLIGHT;
 }
 
 void initLogicalDeviceAndQueues(VkDevice* device, VkPhysicalDevice* physicalDevice, QueueFamilyIndices* queueFamilyIndices) {
@@ -281,23 +274,30 @@ void initSurface(GLFWwindow* window, VkInstance* instance, VkSurfaceKHR* surface
 void runVulkanApp() {
     GLFWwindow* window;
     VulkanContext vulkanContext = VulkanContext{};
-    
-    initWindow(&window);
+
+  initGLFW(&window, &vulkanContext);
     initVulkan(window, &vulkanContext);
     mainLoop(window, &vulkanContext);
     cleanup(window, &vulkanContext);
 }
 
-void initWindow(GLFWwindow** window) {
+// Callback for when screen changes size
+void framebuffer_size_callback(GLFWwindow* window, int width, int height)
+{
+    //VulkanContext* vulkanContext = (VulkanContext*)glfwGetWindowUserPointer(window);
+}
+
+void initGLFW(GLFWwindow** window, VulkanContext* vulkanContext) {
     glfwInit();
     // Do not create OpenGL context when we ask to create window
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-    glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
-    *window = glfwCreateWindow(WIDTH, HEIGHT, "Vulkan", nullptr/*which monitor*/, nullptr);
+    glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
+    *window = glfwCreateWindow(INITIAL_VIEWPORT_WIDTH, INITIAL_VIEWPORT_HEIGHT, "Vulkan", nullptr/*which monitor*/, nullptr);
+    glfwSetWindowUserPointer(*window, vulkanContext);
+    glfwSetFramebufferSizeCallback(*window, framebuffer_size_callback);
 }
 
 bool32 findQueueFamilies(VkSurfaceKHR* surface, VkPhysicalDevice* device, QueueFamilyIndices* queueFamilyIndices) {
-    bool32 result = false;
     uint32 queueFamilyCount = 0;
     vkGetPhysicalDeviceQueueFamilyProperties(*device, &queueFamilyCount, nullptr);
 
@@ -366,7 +366,7 @@ bool32 checkPhysicalDeviceSwapChainSupport(VkPhysicalDevice* physicalDevice, VkS
     return formatCount > 0 && presentModeCount > 0;
 }
 
-void initSwapChain(VkSurfaceKHR* surface, VkPhysicalDevice* physicalDevice, VkDevice* logicalDevice, QueueFamilyIndices* queueFamilyIndices, SwapChain* swapChain) {
+void initSwapChain(VkSurfaceKHR* surface, VkPhysicalDevice* physicalDevice, VkDevice* logicalDevice, QueueFamilyIndices* queueFamilyIndices, SwapChain* swapChain, VkExtent2D viewportExtent) {
     VkSurfaceCapabilitiesKHR surfaceCapabilities;
     vkGetPhysicalDeviceSurfaceCapabilitiesKHR(*physicalDevice, *surface, &surfaceCapabilities);
 
@@ -402,8 +402,8 @@ void initSwapChain(VkSurfaceKHR* surface, VkPhysicalDevice* physicalDevice, VkDe
     if (surfaceCapabilities.currentExtent.width == UINT32_MAX) {
         VkExtent2D minExtent = surfaceCapabilities.minImageExtent;
         VkExtent2D maxExtent = surfaceCapabilities.maxImageExtent;
-        swapChain->extent.width = clamp(minExtent.width, maxExtent.width, WIDTH);
-        swapChain->extent.height = clamp(minExtent.height, maxExtent.height, HEIGHT);
+        swapChain->extent.width = clamp(minExtent.width, maxExtent.width, viewportExtent.width);
+        swapChain->extent.height = clamp(minExtent.height, maxExtent.height, viewportExtent.height);
     }
 
     uint32 imageCount = surfaceCapabilities.minImageCount + 1;
@@ -795,7 +795,7 @@ void initGraphicsPipeline(VkDevice* logicalDevice, VkExtent2D* extent, VkPipelin
     rasterizationStateCI.rasterizerDiscardEnable = VK_FALSE;
     rasterizationStateCI.polygonMode = VK_POLYGON_MODE_FILL;
     rasterizationStateCI.lineWidth = 1.0f;
-    rasterizationStateCI.cullMode = VK_CULL_MODE_NONE; //TODO: VK_CULL_MODE_BACK_BIT;
+    rasterizationStateCI.cullMode = VK_CULL_MODE_BACK_BIT;
     rasterizationStateCI.frontFace = VK_FRONT_FACE_CLOCKWISE;
     rasterizationStateCI.depthBiasEnable = VK_FALSE;
     rasterizationStateCI.depthBiasConstantFactor = 0.0f;
@@ -966,11 +966,8 @@ void initCommandBuffers(VkDevice* logicalDevice, VkCommandPool* commandPool, VkC
     }
 }
 
-void initSyncObjects(VkDevice* logicalDevice, VkSemaphore** imageAvailableSemaphores, VkSemaphore** renderFinishedSemaphores, VkFence** inFlightFences, VkFence** imagesInFlight, SwapChain* swapChain) {
-    *imageAvailableSemaphores = new VkSemaphore[MAX_FRAMES_IN_FLIGHT];
-    *renderFinishedSemaphores = new VkSemaphore[MAX_FRAMES_IN_FLIGHT];
-    *inFlightFences = new VkFence[MAX_FRAMES_IN_FLIGHT];
-    *imagesInFlight = new VkFence[swapChain->imageCount];
+void initSyncObjects(VkDevice* logicalDevice, VkSemaphore* presentCompleteSemaphores, VkSemaphore* renderCompleteSemaphores, VkFence** commandBufferFences, uint32 commandBufferCount) {
+    *commandBufferFences = new VkFence[commandBufferCount];
 
     VkSemaphoreCreateInfo semaphoreCI{};
     semaphoreCI.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
@@ -979,25 +976,24 @@ void initSyncObjects(VkDevice* logicalDevice, VkSemaphore** imageAvailableSemaph
     fenceCI.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
     fenceCI.flags = VK_FENCE_CREATE_SIGNALED_BIT;
 
-    for(uint32 i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
-        if (vkCreateSemaphore(*logicalDevice, &semaphoreCI, nullAllocator, &(*imageAvailableSemaphores)[i]) != VK_SUCCESS ||
-            vkCreateSemaphore(*logicalDevice, &semaphoreCI, nullAllocator, &(*renderFinishedSemaphores)[i]) != VK_SUCCESS ||
-            vkCreateFence(*logicalDevice, &fenceCI, nullAllocator, &(*inFlightFences)[i]) != VK_SUCCESS) {
-            throw std::runtime_error("failed to create synchronization objects!");
-        }
+    if(vkCreateSemaphore(*logicalDevice, &semaphoreCI, nullAllocator, presentCompleteSemaphores) != VK_SUCCESS ||
+       vkCreateSemaphore(*logicalDevice, &semaphoreCI, nullAllocator, renderCompleteSemaphores) != VK_SUCCESS) {
+            throw std::runtime_error("failed to create semaphores!");
     }
-
-    for(uint32 i = 0; i < swapChain->imageCount; ++i) {
-        (*imagesInFlight)[i] = VK_NULL_HANDLE;
+    for(uint32 i = 0; i < commandBufferCount; ++i) {
+        if (vkCreateFence(*logicalDevice, &fenceCI, nullAllocator, *commandBufferFences + i) != VK_SUCCESS) {
+            throw std::runtime_error("failed to create fences!");
+        }
     }
 }
 
 void initVulkan(GLFWwindow* window, VulkanContext* vulkanContext) {
     VkPhysicalDevice physicalDevice;
     QueueFamilyIndices queueFamilyIndices{};
-    
-    vulkanContext->currentFrame = 0;
-    
+
+    vulkanContext->viewportExtent.width = INITIAL_VIEWPORT_WIDTH;
+    vulkanContext->viewportExtent.height = INITIAL_VIEWPORT_HEIGHT;
+
     initVulkanInstance(&vulkanContext->instance, &vulkanContext->debugMessenger);
     initSurface(window, &vulkanContext->instance, &vulkanContext->surface);
     pickPhysicalDevice(vulkanContext, &physicalDevice, &queueFamilyIndices);
@@ -1006,14 +1002,14 @@ void initVulkan(GLFWwindow* window, VulkanContext* vulkanContext) {
     vkGetDeviceQueue(vulkanContext->logicalDevice, queueFamilyIndices.graphics, 0, &vulkanContext->graphicsQueue);
     vkGetDeviceQueue(vulkanContext->logicalDevice, queueFamilyIndices.present, 0, &vulkanContext->presentQueue);
     vkGetDeviceQueue(vulkanContext->logicalDevice, queueFamilyIndices.transfer, 0, &vulkanContext->transferQueue);
-    initSwapChain(&vulkanContext->surface, &physicalDevice, &vulkanContext->logicalDevice, &queueFamilyIndices, &vulkanContext->swapChain);
+    initSwapChain(&vulkanContext->surface, &physicalDevice, &vulkanContext->logicalDevice, &queueFamilyIndices, &vulkanContext->swapChain, vulkanContext->viewportExtent);
     initImageViews(&vulkanContext->logicalDevice, &vulkanContext->swapChain);
     initRenderPass(&vulkanContext->logicalDevice, &vulkanContext->swapChain, &vulkanContext->renderPass);
     initGraphicsPipeline(&vulkanContext->logicalDevice, &vulkanContext->swapChain.extent, &vulkanContext->pipelineLayout, &vulkanContext->renderPass, &vulkanContext->graphicsPipeline);
     initFramebuffers(&vulkanContext->logicalDevice, &vulkanContext->swapChain, &vulkanContext->renderPass);
     initCommandPool(&vulkanContext->logicalDevice, &vulkanContext->commandPool, &queueFamilyIndices);
     initCommandBuffers(&vulkanContext->logicalDevice, &vulkanContext->commandPool, &vulkanContext->commandBuffers, &vulkanContext->commandBufferCount, &vulkanContext->swapChain);
-    initSyncObjects(&vulkanContext->logicalDevice, &vulkanContext->imageAvailableSemaphores, &vulkanContext->renderFinishedSemaphores, &vulkanContext->inFlightFences, &vulkanContext->imagesInFlight, &vulkanContext->swapChain);
+    initSyncObjects(&vulkanContext->logicalDevice, &vulkanContext->semaphores.present, &vulkanContext->semaphores.render, &vulkanContext->commandBufferFences, vulkanContext->commandBufferCount);
     initVertexAttributes(vulkanContext);
 }
 
@@ -1171,6 +1167,7 @@ void cleanup(GLFWwindow* window, VulkanContext* vulkanContext) {
         DestroyDebugUtilsMessengerEXT(&vulkanContext->instance, &vulkanContext->debugMessenger, nullAllocator);
     }
 
+    // NOTE: No need to call vkFreeCommandBuffers as they get freed when the command pool is destroyed
     vkDestroyCommandPool(vulkanContext->logicalDevice, vulkanContext->commandPool, nullAllocator);
     
     for(uint32 i = 0; i < vulkanContext->swapChain.framebufferCount; ++i) {
@@ -1181,11 +1178,11 @@ void cleanup(GLFWwindow* window, VulkanContext* vulkanContext) {
         vkDestroyImageView(vulkanContext->logicalDevice, vulkanContext->swapChain.imageViews[i], nullAllocator);
     }
 
-    for(uint32 i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
-        vkDestroySemaphore(vulkanContext->logicalDevice, vulkanContext->renderFinishedSemaphores[i], nullAllocator);
-        vkDestroySemaphore(vulkanContext->logicalDevice, vulkanContext->imageAvailableSemaphores[i], nullAllocator);
-        vkDestroyFence(vulkanContext->logicalDevice, vulkanContext->inFlightFences[i], nullAllocator);
+    for(uint32 i = 0; i < vulkanContext->commandBufferCount; ++i) {
+        vkDestroyFence(vulkanContext->logicalDevice, vulkanContext->commandBufferFences[i], nullAllocator);
     }
+    vkDestroySemaphore(vulkanContext->logicalDevice, vulkanContext->semaphores.render, nullAllocator);
+    vkDestroySemaphore(vulkanContext->logicalDevice, vulkanContext->semaphores.present, nullAllocator);
 
     vkDestroyBuffer(vulkanContext->logicalDevice, vulkanContext->vertexAtt.buffer, nullAllocator);
     vkFreeMemory(vulkanContext->logicalDevice, vulkanContext->vertexAtt.memory, nullAllocator);
@@ -1201,10 +1198,7 @@ void cleanup(GLFWwindow* window, VulkanContext* vulkanContext) {
     delete[] vulkanContext->swapChain.framebuffers;
     delete[] vulkanContext->swapChain.imageViews;
     delete[] vulkanContext->commandBuffers;
-    delete[] vulkanContext->renderFinishedSemaphores;
-    delete[] vulkanContext->imageAvailableSemaphores;
-    delete[] vulkanContext->inFlightFences;
-    delete[] vulkanContext->imagesInFlight;
+    delete[] vulkanContext->commandBufferFences;
     
     glfwDestroyWindow(window);
     glfwTerminate();
