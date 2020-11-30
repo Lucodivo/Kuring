@@ -5,9 +5,10 @@
    $Creator: Connor Haskins $
    ======================================================================== */
 
-#include "VulkanApp.h"
 #include <stdexcept>
 #include <iostream>
+
+#include "VulkanApp.h"
 
 int main() {
     try {

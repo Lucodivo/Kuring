@@ -1,6 +1,7 @@
 @call build_spirv.bat
 
 @echo off
+rem calling vcvarsall is unnecessary if the command prompt has previously called it
 if "%1"=="" goto vcvarsall_skip
 if "%1"=="vcvarsall" call "C:\Program Files (x86)\Microsoft Visual Studio\2019\Community\VC\Auxiliary\Build\vcvarsall.bat" x64
 :vcvarsall_skip
@@ -35,7 +36,7 @@ pushd build
 
 rem Fm - Tells linker to produce a mapfile
 @echo on
-cl %CommonCompilerOptions% ../src/*.cpp -Fmmain.map /link %CommonLinkerOptions%
+cl %CommonCompilerOptions% ../src/*.cpp -Fmmain.map -FeKuring.exe /link %CommonLinkerOptions%
 @echo off
 rem popd: pop previously saved dir
 popd

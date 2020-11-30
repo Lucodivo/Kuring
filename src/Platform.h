@@ -6,22 +6,35 @@ typedef int8_t int8;
 typedef int16_t int16;
 typedef int32_t int32;
 typedef int64_t int64;
-typedef int32 bool32;
 
 typedef uint8_t uint8;
 typedef uint16_t uint16;
 typedef uint32_t uint32;
 typedef uint64_t uint64;
 
+typedef float float32;
+typedef double float64;
+
 typedef size_t memory_index;
 
-typedef float real32;
-typedef double real64;
+typedef int32 bool32;
 
 #define ArrayCount(Array) (sizeof(Array) / sizeof((Array)[0]))
-#define min(x, y) (x < y ? x : y)
-#define max(x, y) (x > y ? x : y)
-#define clamp(lowerBound, upperBound, desiredVal) (desiredVal < lowerBound ? lowerBound : (desiredVal > upperBound ? upperBound : desiredVal))
 
-#define local_persist static
-#define global_variable static
+#define local_access static
+#define file_access static
+#define class_access static
+
+#ifdef NOT_DEBUG
+#define Assert(Expression)
+#else
+#define Assert(Expression) if(!(Expression)) {*(int *)0 = 0;}
+#endif
+
+#define InvalidCodePath Assert(!"InvalidCodePath");
+
+struct Extent2D
+{
+  uint32 width;
+  uint32 height;
+};

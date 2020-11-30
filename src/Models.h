@@ -9,8 +9,8 @@
 
 // PosColVertexAtt layout used in this example
 struct PosColVertexAtt {
-    real32 position[3];
-    real32 color[3];
+  float32 position[3];
+  float32 color[3];
 };
 
 const PosColVertexAtt fullScreenQuadVertexAttData[] =
