@@ -68,6 +68,10 @@ ControllerAnalogStick getControllerAnalogStickRight();
 void closeWindow();
 void enableCursor(bool enable);
 bool isCursorEnabled();
+bool isWindowMode();
+void toWindowedMode(uint32 width, uint32 height);
+void toFullScreenMode();
+void toggleWindowSize(uint32 width, uint32 height);
 
 // NOTE: Call with NULL to unsubscribe
 void subscribeWindowSizeCallback(WindowSizeCallback callback);

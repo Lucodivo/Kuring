@@ -26,6 +26,7 @@ file_access ControllerAnalogStick analogStickRight = { 0, 0 };
 file_access float32 mouseScrollY = 0.0f;
 file_access int8 controller1TriggerLeftValue = 0;
 file_access int8 controller1TriggerRightValue = 0;
+file_access bool windowMode = true;
 file_access std::unordered_map<InputType, InputState>* inputState = nullptr;
 file_access WindowSizeCallback windowSizeCallback = nullptr;
 file_access GLFWwindow* window = nullptr;
@@ -47,6 +48,11 @@ void initializeInput(GLFWwindow* wndw)
   window = wndw;
   glfwSetScrollCallback(window, glfw_mouse_scroll_callback);
   glfwSetFramebufferSizeCallback(window, glfw_framebuffer_size_callback);
+  GLFWmonitor* monitor = glfwGetPrimaryMonitor();
+  const GLFWvidmode* mode = glfwGetVideoMode(monitor);
+  int32 width, height;
+  glfwGetWindowSize(window, &width, &height);
+  windowMode = (mode->width != width) || (mode->height != height);
 
   inputState = new std::unordered_map<InputType, InputState>();
 
@@ -408,6 +414,32 @@ void glfw_framebuffer_size_callback(GLFWwindow* w, int32 width, int32 height)
   }
 }
 
+void toWindowedMode(const uint32 width, const uint32 height)
+{
+  GLFWmonitor* monitor = glfwGetPrimaryMonitor();
+  const GLFWvidmode* mode = glfwGetVideoMode(monitor);
+  uint32 centeringUpperLeftX = (mode->width / 2) - (width / 2);
+  uint32 centeringUpperLeftY = (mode->height / 2) - (height / 2);
+  glfwSetWindowMonitor(window, NULL/*Null for windowed mode*/, centeringUpperLeftX, centeringUpperLeftY, width, height, GLFW_DONT_CARE);
+}
+
+void toFullScreenMode()
+{
+  GLFWmonitor* monitor = glfwGetPrimaryMonitor();
+  const GLFWvidmode* mode = glfwGetVideoMode(monitor);
+  glfwSetWindowMonitor(window, monitor, 0, 0, mode->width, mode->height, GLFW_DONT_CARE);
+}
+
+void toggleWindowSize(const uint32 width, const uint32 height)
+{
+  if (windowMode) {
+    toFullScreenMode();
+  } else{
+    toWindowedMode(width, height);
+  }
+  windowMode = !windowMode;
+}
+
 void closeWindow() {
   glfwSetWindowShouldClose(window, true);
 }
@@ -421,6 +453,11 @@ void enableCursor(bool enable)
 bool isCursorEnabled()
 {
   return glfwGetInputMode(window, GLFW_CURSOR) == GLFW_CURSOR_NORMAL;
+}
+
+bool isWindowMode()
+{
+  return windowMode;
 }
 
 file_access void loadXInput()
