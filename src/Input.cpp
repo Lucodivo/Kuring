@@ -8,6 +8,12 @@
 #include <vector>
 #include <unordered_map>
 
+enum WindowMode {
+  WindowMode_Minimized = 1 << 0,
+  WindowMode_FullScreen = 1 << 1,
+  WindowMode_Windowed = 1 << 2,
+};
+
 file_access void setKeyState(uint32 glfwKey, InputType keyboardInput);
 file_access void setMouseState(uint32 glfwKey, InputType mouseInput);
 file_access void setControllerState(int16 gamepadFlags, uint32 xInputButtonFlag, InputType controllerInput);
@@ -16,7 +22,7 @@ file_access void loadXInput();
 file_access void glfw_mouse_scroll_callback(GLFWwindow* wndw, float64 xOffset, float64 yOffset);
 file_access void glfw_framebuffer_size_callback(GLFWwindow* wndw, int32 width, int32 height);
 
-file_access Consumabool windowModeChangeTossNextInput = Consumabool(false);
+file_access Consumabool windowModeChange_TrashNextInput = Consumabool(false);
 file_access Extent2D globalWindowExtent = Extent2D{ 0, 0 };
 file_access MouseCoord globalMouseScroll = MouseCoord{ 0.0f, 0.0f };
 file_access MouseCoord mousePosition = { 0.0f, 0.0f };
@@ -26,7 +32,7 @@ file_access ControllerAnalogStick analogStickRight = { 0, 0 };
 file_access float32 mouseScrollY = 0.0f;
 file_access int8 controller1TriggerLeftValue = 0;
 file_access int8 controller1TriggerRightValue = 0;
-file_access bool windowMode = true;
+file_access WindowMode windowMode;
 file_access std::unordered_map<InputType, InputState>* inputState = nullptr;
 file_access WindowSizeCallback windowSizeCallback = nullptr;
 file_access GLFWwindow* window = nullptr;
@@ -43,16 +49,25 @@ X_INPUT_GET_STATE(XInputGetStateStub) // create stub function of type above
 file_access x_input_get_state* XInputGetState_ = XInputGetStateStub; // Create a function pointer of type above to point to stub
 #define XInputGetState XInputGetState_ // Allow us to use XInputGetState method name without conflicting with definition in Xinput.h
 
+void setWindowMode() {
+  GLFWmonitor* monitor = glfwGetPrimaryMonitor();
+  const GLFWvidmode* mode = glfwGetVideoMode(monitor);
+  int32 width, height;
+  glfwGetWindowSize(window, &width, &height);
+  if(width == 0 || height == 0) {
+    windowMode = WindowMode_Minimized;
+  } else if ((mode->width == width) && (mode->height == height)) {
+    windowMode = WindowMode_FullScreen;
+  } else {
+    windowMode = WindowMode_Windowed;
+  }
+}
+
 void initializeInput(GLFWwindow* wndw)
 {
   window = wndw;
   glfwSetScrollCallback(window, glfw_mouse_scroll_callback);
   glfwSetFramebufferSizeCallback(window, glfw_framebuffer_size_callback);
-  GLFWmonitor* monitor = glfwGetPrimaryMonitor();
-  const GLFWvidmode* mode = glfwGetVideoMode(monitor);
-  int32 width, height;
-  glfwGetWindowSize(window, &width, &height);
-  windowMode = (mode->width != width) || (mode->height != height);
 
   inputState = new std::unordered_map<InputType, InputState>();
 
@@ -61,6 +76,8 @@ void initializeInput(GLFWwindow* wndw)
   framebufferWidth = max(0, framebufferWidth);
   framebufferHeight = max(0, framebufferHeight);
   globalWindowExtent = Extent2D{ (uint32)framebufferWidth, (uint32)framebufferHeight};
+
+  setWindowMode();
 
   loadXInput();
 }
@@ -74,7 +91,7 @@ void deinitializeInput()
 
   delete inputState;
 
-  windowModeChangeTossNextInput.consume();
+  windowModeChange_TrashNextInput.consume();
   globalWindowExtent = Extent2D{ 0, 0 };
   globalMouseScroll = MouseCoord{ 0.0f, 0.0f };
   mousePosition = { 0.0f, 0.0f };
@@ -232,7 +249,7 @@ void loadInputStateForFrame() {
       glfwGetCursorPos(window, &newMouseCoord.x, &newMouseCoord.y);
 
       // NOTE: We do not consume mouse input on window size changes as it results in unwanted values
-      mouseDelta = windowModeChangeTossNextInput.consume() ? MouseCoord{0.0f, 0.0f} : MouseCoord{newMouseCoord.x - mousePosition.x, newMouseCoord.y - mousePosition.y};
+      mouseDelta = windowModeChange_TrashNextInput.consume() ? MouseCoord{0.0f, 0.0f} : MouseCoord{newMouseCoord.x - mousePosition.x, newMouseCoord.y - mousePosition.y};
       mousePosition = newMouseCoord;
 
       std::unordered_map<InputType, InputState>::iterator movementIterator = inputState->find(MouseInput_Movement);
@@ -389,16 +406,19 @@ void subscribeWindowSizeCallback(WindowSizeCallback callback)
   windowSizeCallback = callback;
 }
 
+bool isMinimized() {
+  return windowMode == WindowMode_Minimized;
+}
+
 // NOTE: returns (0,0) when no longer on screen
 void glfw_framebuffer_size_callback(GLFWwindow* w, int32 width, int32 height)
 {
-  local_access bool globalWindowMinimized = false;
   // NOTE: Currently just ignoring minimize.
   if(width <= 0 || height <= 0) {
-    globalWindowMinimized = true;
+    windowMode = WindowMode_Minimized;
     return;
-  } else if(globalWindowMinimized) {
-    globalWindowMinimized = false;
+  } else if(windowMode == WindowMode_Minimized) {
+    setWindowMode();
     // return if no change in size has been made to the framebuffer since minimization
     if(globalWindowExtent.width == (uint32)width && globalWindowExtent.height == (uint32)height)
     {
@@ -406,7 +426,7 @@ void glfw_framebuffer_size_callback(GLFWwindow* w, int32 width, int32 height)
     }
   }
 
-  windowModeChangeTossNextInput.set();
+  windowModeChange_TrashNextInput.set();
   globalWindowExtent = { (uint32)width, (uint32)height };
 
   if(windowSizeCallback != nullptr) {
@@ -421,6 +441,7 @@ void toWindowedMode(const uint32 width, const uint32 height)
   uint32 centeringUpperLeftX = (mode->width / 2) - (width / 2);
   uint32 centeringUpperLeftY = (mode->height / 2) - (height / 2);
   glfwSetWindowMonitor(window, NULL/*Null for windowed mode*/, centeringUpperLeftX, centeringUpperLeftY, width, height, GLFW_DONT_CARE);
+  windowMode = WindowMode_Windowed;
 }
 
 void toFullScreenMode()
@@ -428,16 +449,16 @@ void toFullScreenMode()
   GLFWmonitor* monitor = glfwGetPrimaryMonitor();
   const GLFWvidmode* mode = glfwGetVideoMode(monitor);
   glfwSetWindowMonitor(window, monitor, 0, 0, mode->width, mode->height, GLFW_DONT_CARE);
+  windowMode = WindowMode_FullScreen;
 }
 
 void toggleWindowSize(const uint32 width, const uint32 height)
 {
-  if (windowMode) {
+  if (windowMode == WindowMode_Windowed) {
     toFullScreenMode();
   } else{
     toWindowedMode(width, height);
   }
-  windowMode = !windowMode;
 }
 
 void closeWindow() {
@@ -447,7 +468,7 @@ void closeWindow() {
 void enableCursor(bool enable)
 {
   glfwSetInputMode(window, GLFW_CURSOR, enable ? GLFW_CURSOR_NORMAL : GLFW_CURSOR_DISABLED);
-  windowModeChangeTossNextInput.set();
+  windowModeChange_TrashNextInput.set();
 }
 
 bool isCursorEnabled()
@@ -455,9 +476,13 @@ bool isCursorEnabled()
   return glfwGetInputMode(window, GLFW_CURSOR) == GLFW_CURSOR_NORMAL;
 }
 
-bool isWindowMode()
+bool isWindowFullscreen()
 {
-  return windowMode;
+  return windowMode == WindowMode_FullScreen;
+}
+
+bool isWindowMinimized() {
+  return windowMode == WindowMode_Minimized;
 }
 
 file_access void loadXInput()

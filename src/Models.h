@@ -33,11 +33,11 @@ const PosColVertexAtt fullScreenQuadVertexAttData[] =
     }
 };
 const uint32 fullScreenQuadVertexAttCount = ArrayCount(fullScreenQuadVertexAttData);
-const uint32 fullScreenQuadVertexAttDataSize = ArrayCount(fullScreenQuadVertexAttData) * sizeof(PosColVertexAtt);
+const uint32 fullScreenQuadVertexAttDataSize = fullScreenQuadVertexAttCount * sizeof(PosColVertexAtt);
 const uint32 fullScreenQuadIndexData[] = { 0, 1, 2,
                                            0, 3, 1};
 const uint32 fullScreenQuadIndexCount = ArrayCount(fullScreenQuadIndexData);
-const uint32 fullScreenQuadIndexDataSize = (fullScreenQuadIndexCount) * sizeof(uint32);
+const uint32 fullScreenQuadIndexDataSize = fullScreenQuadIndexCount * sizeof(uint32);
 
 
 const PosColVertexAtt triangleVertexAttData[] =

@@ -49,13 +49,14 @@ struct VulkanContext {
   VkRenderPass renderPass;
   VkPipelineLayout pipelineLayout;
   VkPipeline graphicsPipeline;
-  VkCommandPool commandPool;
+  VkCommandPool graphicsCommandPool;
+  VkCommandPool transferCommandPool;
   uint32 commandBufferCount;
   VkCommandBuffer* commandBuffers;
   VkFence* commandBufferFences;
 
   struct {
-    VkDevice handle;
+    VkDevice logical;
     VkPhysicalDevice physical;
     VkPhysicalDeviceMemoryProperties memoryProperties;
     QueueFamilyIndices queueFamilyIndices;
@@ -69,6 +70,7 @@ struct VulkanContext {
   struct {
       VkDeviceMemory memory;
       VkBuffer buffer;
+      VkDeviceSize bufferOffset;
       uint32 verticesOffset;
       uint32 indicesOffset;
   } vertexAtt;
@@ -103,14 +105,14 @@ void destroyImageViews(VulkanContext* vulkanContext);
 void initCommandBuffers(VulkanContext* vulkanContext);
 void populateCommandBuffers(VulkanContext* vulkanContext);
 void initSwapChain(VulkanContext* vulkanContext);
-void initRenderPass(VkDevice* logicalDevice, SwapChain* swapChain, VkRenderPass* renderPass);
+void initRenderPass(VkDevice* logicalDevice, VkFormat colorAttachmentFormat, VkRenderPass* renderPass);
 void initGraphicsPipeline(VulkanContext* vulkanContext);
-void initCommandPool(VkDevice* logicalDevice, VkCommandPool* commandPool, QueueFamilyIndices* queueFamilyIndices);
+void initCommandPools(VulkanContext* vulkanContext);
 
 const uint32 INITIAL_VIEWPORT_WIDTH = 1200;
 const uint32 INITIAL_VIEWPORT_HEIGHT = 1200;
 
-const uint32 VERTEX_INPUT_BINDING_INDEX = 0;
+const uint32 QUAD_VERTEX_INPUT_BINDING_INDEX = 0;
 const uint64 DEFAULT_FENCE_TIMEOUT = 100000000000;
 
 #ifdef NOT_DEBUG
@@ -148,7 +150,7 @@ void mainLoop(GLFWwindow* window, VulkanContext* vulkanContext) {
     glfwPollEvents();
   }
 
-  vkDeviceWaitIdle(vulkanContext->device.handle);
+  vkDeviceWaitIdle(vulkanContext->device.logical);
 }
 
 void processKeyboardInput() {
@@ -174,23 +176,28 @@ void recreateSwapChain(VulkanContext* vulkanContext)
   vulkanContext->windowExtent = { windowExtent.width, windowExtent.height };
 
   // Ensure all operations on the device have been finished before destroying resources
-  vkDeviceWaitIdle(vulkanContext->device.handle);
+  vkDeviceWaitIdle(vulkanContext->device.logical);
 
   // cleanup
   destroyFramebuffers(vulkanContext);
-  vkFreeCommandBuffers(vulkanContext->device.handle, vulkanContext->commandPool, vulkanContext->commandBufferCount, vulkanContext->commandBuffers);
-  vkDestroyPipeline(vulkanContext->device.handle, vulkanContext->graphicsPipeline, nullAllocator);
-  vkDestroyPipelineLayout(vulkanContext->device.handle, vulkanContext->pipelineLayout, nullAllocator);
-  vkDestroyRenderPass(vulkanContext->device.handle, vulkanContext->renderPass, nullAllocator);
+  vkFreeCommandBuffers(vulkanContext->device.logical, vulkanContext->graphicsCommandPool, vulkanContext->commandBufferCount, vulkanContext->commandBuffers);
+  vkDestroyPipeline(vulkanContext->device.logical, vulkanContext->graphicsPipeline, nullAllocator);
+  vkDestroyPipelineLayout(vulkanContext->device.logical, vulkanContext->pipelineLayout, nullAllocator);
+  vkDestroyRenderPass(vulkanContext->device.logical, vulkanContext->renderPass, nullAllocator);
   destroyImageViews(vulkanContext);
-  vkDestroySwapchainKHR(vulkanContext->device.handle, vulkanContext->swapChain.handle, nullAllocator);
+  vkDestroySwapchainKHR(vulkanContext->device.logical, vulkanContext->swapChain.handle, nullAllocator);
 
   // Note: Recreate swap chain with new dimensions
   initSwapChain(vulkanContext);
-  initImageViews(&vulkanContext->device.handle, &vulkanContext->swapChain);
-  initRenderPass(&vulkanContext->device.handle, &vulkanContext->swapChain, &vulkanContext->renderPass);
+  // image views are directly associated with swap chain images
+  initImageViews(&vulkanContext->device.logical, &vulkanContext->swapChain);
+  // Our render pass' color attachment image format is currently directly related to our swap chain's image format
+  initRenderPass(&vulkanContext->device.logical, vulkanContext->swapChain.format, &vulkanContext->renderPass);
+  // The graphics pipeline references the render pass and also contains viewport/scissor information that most likely needs to be updated
   initGraphicsPipeline(vulkanContext);
+  // Framebuffers references the render pass and, in our situation, are wrappers around image views of the swap chain's images
   initFramebuffers(vulkanContext);
+  // Command buffers reference the renderpass, framebuffers, and graphics pipeline
   initCommandBuffers(vulkanContext);
   populateCommandBuffers(vulkanContext);
 
@@ -199,59 +206,60 @@ void recreateSwapChain(VulkanContext* vulkanContext)
 
 void drawFrame(VulkanContext* vulkanContext)
 {
-  uint32 bufferIndex; // index inside swapChain.images
-  VkResult acquireResult = vkAcquireNextImageKHR(vulkanContext->device.handle,
+  uint32 swapChainImageIndex; // index inside swapChain.images
+  VkResult acquireResult = vkAcquireNextImageKHR(vulkanContext->device.logical,
                         vulkanContext->swapChain.handle,
                         UINT64_MAX,
                         vulkanContext->semaphores.present/*get informed when presentation is complete*/,
                         VK_NULL_HANDLE /*fence signal*/,
-                        &bufferIndex);
+                        &swapChainImageIndex);
 
   if (acquireResult == VK_ERROR_OUT_OF_DATE_KHR) {
     recreateSwapChain(vulkanContext);
     acquireResult = vkAcquireNextImageKHR(
-            vulkanContext->device.handle,
+            vulkanContext->device.logical,
              vulkanContext->swapChain.handle,
              UINT64_MAX,
              vulkanContext->semaphores.present/*get informed when presentation is complete*/,
              VK_NULL_HANDLE /*fence signal*/,
-             &bufferIndex);
+             &swapChainImageIndex);
   }
 
   if (acquireResult != VK_SUCCESS && acquireResult != VK_SUBOPTIMAL_KHR) {
     throw std::runtime_error("failed to acquire swap chain image!");
   }
 
-  vkWaitForFences(vulkanContext->device.handle, 1, &vulkanContext->commandBufferFences[bufferIndex], VK_TRUE, UINT64_MAX);
-  vkResetFences(vulkanContext->device.handle, 1, &vulkanContext->commandBufferFences[bufferIndex]);
+  vkWaitForFences(vulkanContext->device.logical, 1, &vulkanContext->commandBufferFences[swapChainImageIndex], VK_TRUE, UINT64_MAX);
+  vkResetFences(vulkanContext->device.logical, 1, &vulkanContext->commandBufferFences[swapChainImageIndex]);
 
-  VkSemaphore waitSemaphores[] = {vulkanContext->semaphores.present}; // which semaphores to wait for
-  VkPipelineStageFlags waitStages[] = {VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT}; // what stages of the corresponding semaphores to wait for
-  VkSemaphore signalSemaphores[] = {vulkanContext->semaphores.render}; // which semaphores to signal when completed
+  VkSemaphore drawWaitSemaphores[] = { vulkanContext->semaphores.present }; // which semaphores to wait for
+  VkPipelineStageFlags drawWaitStages[] = { VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT }; // what stages of the corresponding semaphores to wait for
+  VkSemaphore drawSignalSemaphores[] = { vulkanContext->semaphores.render }; // which semaphores to signal when completed
 
   VkSubmitInfo submitInfo{};
   submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
   submitInfo.commandBufferCount = 1;
-  submitInfo.pCommandBuffers = &vulkanContext->commandBuffers[bufferIndex];
-  submitInfo.pWaitDstStageMask = waitStages;
-  submitInfo.waitSemaphoreCount = ArrayCount(waitSemaphores);
-  submitInfo.pWaitSemaphores = waitSemaphores; // Ensure that the image has been presented before we modify it
-  submitInfo.signalSemaphoreCount = ArrayCount(signalSemaphores);
-  submitInfo.pSignalSemaphores = signalSemaphores; // signal when the queues work has been completed
+  submitInfo.pCommandBuffers = &vulkanContext->commandBuffers[swapChainImageIndex];
+  submitInfo.pWaitDstStageMask = drawWaitStages;
+  submitInfo.waitSemaphoreCount = ArrayCount(drawWaitSemaphores);
+  submitInfo.pWaitSemaphores = drawWaitSemaphores; // Ensure that the image has been presented before we modify it
+  submitInfo.signalSemaphoreCount = ArrayCount(drawSignalSemaphores);
+  submitInfo.pSignalSemaphores = drawSignalSemaphores; // signal when the queues work has been completed
 
   if (vkQueueSubmit(vulkanContext->graphicsQueue, 1, &submitInfo,
-                    vulkanContext->commandBufferFences[bufferIndex] /* signaled on completion of all submitted command buffers */
+                    vulkanContext->commandBufferFences[swapChainImageIndex] /* signaled on completion of all submitted command buffers */
                     ) != VK_SUCCESS) {
       throw std::runtime_error("failed to submit draw command buffer!");
   }
 
+  VkSemaphore presentWaitSemaphores[] = { vulkanContext->semaphores.render };
   VkPresentInfoKHR presentInfo{};
   presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
-  presentInfo.waitSemaphoreCount = ArrayCount(signalSemaphores);
-  presentInfo.pWaitSemaphores = signalSemaphores;
+  presentInfo.waitSemaphoreCount = ArrayCount(presentWaitSemaphores);
+  presentInfo.pWaitSemaphores = presentWaitSemaphores;
   presentInfo.swapchainCount = 1;
   presentInfo.pSwapchains = &vulkanContext->swapChain.handle;
-  presentInfo.pImageIndices = &bufferIndex;
+  presentInfo.pImageIndices = &swapChainImageIndex;
   presentInfo.pResults = nullptr; // returns a list of results to determine which swap chain may have failed
 
   VkResult queueResult = vkQueuePresentKHR(vulkanContext->presentQueue, &presentInfo);
@@ -263,6 +271,17 @@ void drawFrame(VulkanContext* vulkanContext)
   }
 }
 
+/*
+ * - Populate a command buffer associated with each of the swap chain framebuffers with the following commands
+ *    - Begin command buffer
+ *      - Begin render pass
+ *        - bind pipeline
+ *        - bind vertex attribute buffer
+ *        - bind index buffer
+ *        - draw
+ *      - End render pass
+ *    - End command buffer
+ */
 void populateCommandBuffers(VulkanContext* vulkanContext) {
   // command buffer recording
   for (uint32 i = 0; i < vulkanContext->commandBufferCount; ++i) {
@@ -293,12 +312,11 @@ void populateCommandBuffers(VulkanContext* vulkanContext) {
       vkCmdBindPipeline(vulkanContext->commandBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, vulkanContext->graphicsPipeline);
 
       // Bind triangle vertex buffer (contains position and colors)
-      VkDeviceSize bufferOffsets[1] = { 0 };
       vkCmdBindVertexBuffers(vulkanContext->commandBuffers[i],
-                             0 /*First binding index as described by VkVertexInputBindingDescription.binding*/,
+                             QUAD_VERTEX_INPUT_BINDING_INDEX/*First binding index as described by VkVertexInputBindingDescription.binding*/,
                              1 /*Vertex buffer count*/,
                              &vulkanContext->vertexAtt.buffer /*Vertex buffer array*/,
-                             bufferOffsets /*offset of vertex attributes in the array of buffers*/);
+                             &vulkanContext->vertexAtt.bufferOffset /*offset of vertex attributes in the associated buffers*/);
 
       // Bind triangle index buffer
       vkCmdBindIndexBuffer(vulkanContext->commandBuffers[i],
@@ -317,7 +335,14 @@ void populateCommandBuffers(VulkanContext* vulkanContext) {
   }
 }
 
-void initLogicalDeviceAndQueues(VkDevice* device, VkPhysicalDevice* physicalDevice, QueueFamilyIndices* queueFamilyIndices) {
+/*
+ * - Create logical device wrapper around the physical device
+ *    - Specify special features that will be used (ex: geometry shader, tesselation shader, multi viewport, adjustable line widths)
+ *    - Specify extensions (swap chain extension, in our case)
+ *    - Specify layers (debug validation layer, in our case)
+ *    - Create and specify queues that will be needed using the queue family indices stored when picking the physical device
+ */
+void initLogicalDeviceAndQueues(VkDevice* logicalDevice, VkPhysicalDevice* physicalDevice, QueueFamilyIndices* queueFamilyIndices) {
     const float32 queuePriority = 1.0f;
     VkDeviceQueueCreateInfo queueCIs[2];
 
@@ -329,19 +354,17 @@ void initLogicalDeviceAndQueues(VkDevice* device, VkPhysicalDevice* physicalDevi
     graphicsQueueCI.pQueuePriorities = &queuePriority;
     queueCIs[0] = graphicsQueueCI;
 
-    VkDeviceQueueCreateInfo presentQueueCI;
     if(queueFamilyIndices->present != queueFamilyIndices->graphics) {
-        presentQueueCI = graphicsQueueCI;
-        presentQueueCI.queueFamilyIndex = queueFamilyIndices->present;
-        queueCIs[uniqueQueuesCount++] = presentQueueCI;
+      VkDeviceQueueCreateInfo presentQueueCI = graphicsQueueCI;
+      presentQueueCI.queueFamilyIndex = queueFamilyIndices->present;
+      queueCIs[uniqueQueuesCount++] = presentQueueCI;
     }
 
-    VkDeviceQueueCreateInfo transferQueueCI;
     if(queueFamilyIndices->transfer != queueFamilyIndices->graphics &&
        queueFamilyIndices->transfer != queueFamilyIndices->present) {
-        transferQueueCI = graphicsQueueCI;
-        transferQueueCI.queueFamilyIndex = queueFamilyIndices->transfer;
-        queueCIs[uniqueQueuesCount++] = transferQueueCI;
+      VkDeviceQueueCreateInfo transferQueueCI = graphicsQueueCI;
+      transferQueueCI.queueFamilyIndex = queueFamilyIndices->transfer;
+      queueCIs[uniqueQueuesCount++] = transferQueueCI;
     }
 
     VkDeviceCreateInfo deviceCI{};
@@ -353,13 +376,16 @@ void initLogicalDeviceAndQueues(VkDevice* device, VkPhysicalDevice* physicalDevi
     deviceCI.enabledExtensionCount = ArrayCount(DEVICE_EXTENSIONS);
     deviceCI.ppEnabledExtensionNames = DEVICE_EXTENSIONS;
     deviceCI.enabledLayerCount = enableValidationLayers ? ArrayCount(VALIDATION_LAYERS) : 0;
-    deviceCI.ppEnabledLayerNames = enableValidationLayers ? VALIDATION_LAYERS : nullptr;
+    deviceCI.ppEnabledLayerNames = VALIDATION_LAYERS;
 
-    if(vkCreateDevice(*physicalDevice, &deviceCI, nullAllocator, device) != VK_SUCCESS) {
+    if(vkCreateDevice(*physicalDevice, &deviceCI, nullAllocator, logicalDevice) != VK_SUCCESS) {
         throw std::runtime_error("failed to create logical device!");
     }
 }
 
+/*
+ * Get surface using GLFW and instance
+ */
 void initSurface(GLFWwindow* window, VkInstance* instance, VkSurfaceKHR* surface) {
     if (glfwCreateWindowSurface(*instance, window, nullptr, surface) != VK_SUCCESS) {
         throw std::runtime_error("failed to create window surface!");
@@ -374,12 +400,17 @@ void framebuffer_size_callback(GLFWwindow* window, int32 width, int32 height)
 }
 
 void initGLFW(GLFWwindow** window, VulkanContext* vulkanContext) {
-    glfwInit();
-    glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API); // We don't want an OpenGL context on creation
-    glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
-    *window = glfwCreateWindow(INITIAL_VIEWPORT_WIDTH, INITIAL_VIEWPORT_HEIGHT, APP_NAME, nullptr/*which monitor*/, nullptr);
-    glfwSetWindowUserPointer(*window, vulkanContext);
-    glfwSetFramebufferSizeCallback(*window, framebuffer_size_callback);
+  glfwInit();
+  glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API); // We don't want an OpenGL context on creation
+  glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
+  *window = glfwCreateWindow(INITIAL_VIEWPORT_WIDTH, INITIAL_VIEWPORT_HEIGHT, APP_NAME, nullptr/*which monitor*/, nullptr);
+  glfwSetWindowUserPointer(*window, vulkanContext);
+  glfwSetFramebufferSizeCallback(*window, framebuffer_size_callback);
+  GLFWmonitor* monitor = glfwGetPrimaryMonitor();
+  const GLFWvidmode* mode = glfwGetVideoMode(monitor);
+  uint32 centeringUpperLeftX = (mode->width / 2) - (INITIAL_VIEWPORT_WIDTH / 2);
+  uint32 centeringUpperLeftY = (mode->height / 2) - (INITIAL_VIEWPORT_HEIGHT / 2);
+  glfwSetWindowMonitor(*window, NULL/*Null for windowed mode*/, centeringUpperLeftX, centeringUpperLeftY, INITIAL_VIEWPORT_WIDTH, INITIAL_VIEWPORT_HEIGHT, GLFW_DONT_CARE);
 }
 
 bool32 findQueueFamilies(VkSurfaceKHR* surface, VkPhysicalDevice* device, QueueFamilyIndices* queueFamilyIndices) {
@@ -416,7 +447,7 @@ bool32 findQueueFamilies(VkSurfaceKHR* surface, VkPhysicalDevice* device, QueueF
     }
 
     delete[] queueFamilies;
-    return present && graphics;
+    return present && graphics && transfer;
 }
 
 bool32 checkPhysicalDeviceExtensionSupport(VkPhysicalDevice* device){
@@ -425,19 +456,19 @@ bool32 checkPhysicalDeviceExtensionSupport(VkPhysicalDevice* device){
     VkExtensionProperties* availableExtensions = new VkExtensionProperties[extensionCount];
     vkEnumerateDeviceExtensionProperties(*device, nullptr, &extensionCount, availableExtensions);
 
-    uint32 supportedExtensions = 0;
-    for(uint32 i = 0; i < ArrayCount(DEVICE_EXTENSIONS); ++i) {
-        if(supportedExtensions < i) break;
-        for(uint32 j = 0; j < extensionCount; ++j) {
-            if(strcmp(DEVICE_EXTENSIONS[i], availableExtensions[j].extensionName) == 0) {
-                ++supportedExtensions;
+    uint32 supportedExtensionsFound = 0;
+    for(uint32 desiredExtensionIndex = 0; desiredExtensionIndex < ArrayCount(DEVICE_EXTENSIONS); ++desiredExtensionIndex) {
+        if(supportedExtensionsFound < desiredExtensionIndex) break;
+        for(uint32 availableExtensionsIndex = 0; availableExtensionsIndex < extensionCount; ++availableExtensionsIndex) {
+            if(strcmp(DEVICE_EXTENSIONS[desiredExtensionIndex], availableExtensions[availableExtensionsIndex].extensionName) == 0) {
+                ++supportedExtensionsFound;
                 break;
             }
         }
     }
 
     delete[] availableExtensions;
-    return supportedExtensions == ArrayCount(DEVICE_EXTENSIONS);
+    return supportedExtensionsFound == ArrayCount(DEVICE_EXTENSIONS);
 }
 
 bool32 checkPhysicalDeviceSwapChainSupport(VkPhysicalDevice* physicalDevice, VkSurfaceKHR* surface) {
@@ -451,6 +482,17 @@ bool32 checkPhysicalDeviceSwapChainSupport(VkPhysicalDevice* physicalDevice, VkS
     return formatCount > 0 && presentModeCount > 0;
 }
 
+/*
+ * - Create a swap chain that is tied to our specified surface
+ *    - prefer B8G8R8A8 SRGB image format
+ *    - prefer mailbox present mode (presentation engine waits for the next vertical blanking)
+ *    - prefer one more than the minimum image count
+ *    - prefer image extents equal to that of VulkanContext.windowExtent
+ *    - specify that we want single images and not array images
+ *    - specify that we are going to only use the images as color attachments
+ *    - specify if our images will be used by multiple queues (depends if our graphics queue is the same as our present queue)
+ *  - Swap chain images are created alongside the swap chain
+ */
 void initSwapChain(VulkanContext* vulkanContext) {
     VkSurfaceCapabilitiesKHR surfaceCapabilities;
     vkGetPhysicalDeviceSurfaceCapabilitiesKHR(vulkanContext->device.physical, vulkanContext->surface, &surfaceCapabilities);
@@ -460,13 +502,13 @@ void initSwapChain(VulkanContext* vulkanContext) {
     VkSurfaceFormatKHR* surfaceFormats = new VkSurfaceFormatKHR[formatCount];
     vkGetPhysicalDeviceSurfaceFormatsKHR(vulkanContext->device.physical, vulkanContext->surface, &formatCount, surfaceFormats);
 
-    VkSurfaceFormatKHR surfaceFormat = surfaceFormats[0];
-    for (uint32 i = 0; i < formatCount; ++i) {
-        if (surfaceFormats[i].format == VK_FORMAT_B8G8R8A8_SRGB && surfaceFormats[i].colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
-            surfaceFormat = surfaceFormats[i];
-            break;
-        }
-    }
+  VkSurfaceFormatKHR surfaceFormat = surfaceFormats[0];
+  for (uint32 i = 0; i < formatCount; ++i) {
+      if (surfaceFormats[i].format == VK_FORMAT_B8G8R8A8_SRGB && surfaceFormats[i].colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
+        surfaceFormat = surfaceFormats[i];
+        break;
+      }
+  }
   vulkanContext->swapChain.format = surfaceFormat.format;
 
     uint32 presentModeCount;
@@ -508,15 +550,14 @@ void initSwapChain(VulkanContext* vulkanContext) {
     swapChainCI.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
 
     uint32 createFamilyIndices[] = {vulkanContext->device.queueFamilyIndices.graphics, vulkanContext->device.queueFamilyIndices.present};
-    if(vulkanContext->device.queueFamilyIndices.graphics != vulkanContext->device.queueFamilyIndices.present) {
+    if(createFamilyIndices[0] != createFamilyIndices[1]) {
         swapChainCI.imageSharingMode = VK_SHARING_MODE_CONCURRENT;
         swapChainCI.queueFamilyIndexCount = 2;
-        swapChainCI.pQueueFamilyIndices = createFamilyIndices;
     } else {
         swapChainCI.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
         swapChainCI.queueFamilyIndexCount = 1;
-        swapChainCI.pQueueFamilyIndices = createFamilyIndices;
     }
+  swapChainCI.pQueueFamilyIndices = createFamilyIndices;
 
     swapChainCI.preTransform = surfaceCapabilities.currentTransform;
     swapChainCI.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR; // ignore blending with other windows on the system
@@ -524,18 +565,27 @@ void initSwapChain(VulkanContext* vulkanContext) {
     swapChainCI.clipped = VK_TRUE; // ignore pixels obscured by other windows
     swapChainCI.oldSwapchain = VK_NULL_HANDLE; // used in the event that our swap chain needs to be recreated at runtime
 
-    if (vkCreateSwapchainKHR(vulkanContext->device.handle, &swapChainCI, nullAllocator, &vulkanContext->swapChain.handle) != VK_SUCCESS) {
+    if (vkCreateSwapchainKHR(vulkanContext->device.logical, &swapChainCI, nullAllocator, &vulkanContext->swapChain.handle) != VK_SUCCESS) {
         throw std::runtime_error("failed to create swap chain!");
     }
 
-    vkGetSwapchainImagesKHR(vulkanContext->device.handle, vulkanContext->swapChain.handle, &vulkanContext->swapChain.imageCount, nullptr);
+    vkGetSwapchainImagesKHR(vulkanContext->device.logical, vulkanContext->swapChain.handle, &vulkanContext->swapChain.imageCount, nullptr);
     vulkanContext->swapChain.images = new VkImage[vulkanContext->swapChain.imageCount];
-    vkGetSwapchainImagesKHR(vulkanContext->device.handle, vulkanContext->swapChain.handle, &vulkanContext->swapChain.imageCount, vulkanContext->swapChain.images);
+    vkGetSwapchainImagesKHR(vulkanContext->device.logical, vulkanContext->swapChain.handle, &vulkanContext->swapChain.imageCount, vulkanContext->swapChain.images);
 
     delete[] surfaceFormats;
     delete[] presentModes;
 }
 
+/*
+ * Use vulkan instance to find a pick a physical device (actual components in computer that can run Vulkan API)
+ *    - Devices are picked on qualities such as:
+ *      - Being a discrete GPU
+ *      - Containing graphics, present, and transfer queues
+ *      - Supports our desired extensions
+ *      - Swap chain supports some color format can can present to our surface
+ * Also sets the queue family indices associated with the physical device
+ */
 void pickPhysicalDevice(VulkanContext* vulkanContext) {
     VkInstance vulkanInstance = vulkanContext->instance;
     VkSurfaceKHR surface = vulkanContext->surface;
@@ -559,7 +609,7 @@ void pickPhysicalDevice(VulkanContext* vulkanContext) {
         vkGetPhysicalDeviceProperties(potentialDevice, &deviceProperties);
         vkGetPhysicalDeviceFeatures(potentialDevice, &deviceFeatures);
 
-        // TODO: More complex device selection if needed
+        // NOTE: Can use a more complex device selection if needed
         bool32 isDeviceSuitable = deviceProperties.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU
             && findQueueFamilies(&surface, &physicalDevices[i], &vulkanContext->device.queueFamilyIndices)
             && checkPhysicalDeviceExtensionSupport(&potentialDevice)
@@ -585,7 +635,7 @@ void pickPhysicalDevice(VulkanContext* vulkanContext) {
 // This is necessary as implementations can offer an arbitrary number of memory types with different
 // memory properties.
 // You can check http://vulkan.gpuinfo.org/ for details on different memory configurations
-uint32 getMemoryTypeIndex(VkPhysicalDeviceMemoryProperties* deviceMemoryProperties, uint32 memoryTypeBits, VkMemoryPropertyFlags properties)
+uint32 getMemoryTypeIndex(VkPhysicalDeviceMemoryProperties const* deviceMemoryProperties, uint32 memoryTypeBits, VkMemoryPropertyFlags properties)
 {
     // Iterate over all memory types available for the device used in this example
     for (uint32 i = 0; i < deviceMemoryProperties->memoryTypeCount; i++)
@@ -605,25 +655,28 @@ uint32 getMemoryTypeIndex(VkPhysicalDeviceMemoryProperties* deviceMemoryProperti
     throw "Could not find a suitable memory type!";
 }
 
-// Prepare vertex and index buffers for an indexed triangle
-// Also uploads them to device local memory using staging and initializes vertex input and attribute binding to match the vertex shader
-void initVertexAttributes(VulkanContext* vulkanContext)
+/*
+ * - Prepare vertex and index buffers for an indexed triangle list
+ * - Transfer vertex and index buffers from host visible memory to device local memory
+ * - Initialize vertex input and attribute binding to match the vertex shader
+ */
+void prepareVertexAttributeMemory(VulkanContext* vulkanContext)
 {
-    VkDevice device = vulkanContext->device.handle;
-    VkDeviceMemory* vertexAttMemory = &vulkanContext->vertexAtt.memory;
-    VkBuffer* vertexAttBuffer = &vulkanContext->vertexAtt.buffer;
-    uint32* indexBufferOffset = &vulkanContext->vertexAtt.indicesOffset;
-    uint32* vertexBufferOffset = &vulkanContext->vertexAtt.verticesOffset;
-    VkPhysicalDeviceMemoryProperties* deviceMemoryProperties = &vulkanContext->device.memoryProperties;
+  vulkanContext->vertexAtt.verticesOffset = 0;
+  vulkanContext->vertexAtt.indicesOffset = fullScreenQuadVertexAttDataSize;
 
-    // A note on memory management in Vulkan in general:
-    //  This is a very complex topic and while it's fine for an example application to small individual memory allocations that is not
-    //  what should be done a real-world application, where you should allocate large chunks of memory at once instead.
+    VkDevice device = vulkanContext->device.logical;
 
-    // Static data like vertex and index buffer should be stored on the device memory
-    // for optimal (and fastest) access by the GPU
-    //
-    // To achieve this we use "staging buffers" :
+    // Note: On memory management in Vulkan in general:
+    //  This is a very complex topic and while it's fine for an example application to use small individual memory allocations, that is not
+    //  what should be done in a real-world application, where you should allocate large chunks of memory at once instead. From that point
+    //  we should ideally create one large buffer and offsets within that buffer pointing to our data. Although additional buffers
+    //  may be used as needed.
+
+    // Note: Static data like vertex and index buffer should be stored on the device memory
+    //  for optimal (and fastest) access by the GPU
+
+    // To achieve the transfer onto device memory we use "staging buffers":
     // - Create a buffer that's visible to the host (and can be mapped)
     // - Copy the data to this buffer
     // - Create another buffer that's local on the device (VRAM) with the same size
@@ -639,59 +692,49 @@ void initVertexAttributes(VulkanContext* vulkanContext)
     hostVisibleVertexBufferInfo.size = totalBufferSize;
     hostVisibleVertexBufferInfo.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT; // Buffer is used as the copy source
 
-    VkBuffer stagingVertexBuffer;
-    vkCreateBuffer(device, &hostVisibleVertexBufferInfo, nullAllocator, &stagingVertexBuffer);
+    VkBuffer hostVisibleVertexBuffer;
+    vkCreateBuffer(device, &hostVisibleVertexBufferInfo, nullAllocator, &hostVisibleVertexBuffer);
 
-    VkMemoryRequirements vertexAttBufferMemReqs;
-    vkGetBufferMemoryRequirements(device, stagingVertexBuffer, &vertexAttBufferMemReqs);
+    VkMemoryRequirements hostVisisbleVertexAttBufferMemReqs;
+    vkGetBufferMemoryRequirements(device, hostVisibleVertexBuffer, &hostVisisbleVertexAttBufferMemReqs);
 
     VkMemoryAllocateInfo vertexAttBufferMemAllocInfo = {};
     vertexAttBufferMemAllocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-    vertexAttBufferMemAllocInfo.allocationSize = vertexAttBufferMemReqs.size;
-    vertexAttBufferMemAllocInfo.memoryTypeIndex = getMemoryTypeIndex(deviceMemoryProperties, vertexAttBufferMemReqs.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    vertexAttBufferMemAllocInfo.allocationSize = hostVisisbleVertexAttBufferMemReqs.size;
+    vertexAttBufferMemAllocInfo.memoryTypeIndex = getMemoryTypeIndex(&vulkanContext->device.memoryProperties, hostVisisbleVertexAttBufferMemReqs.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
 
-    VkDeviceMemory stagingVertexMemory;
-    vkAllocateMemory(device, &vertexAttBufferMemAllocInfo, nullAllocator, &stagingVertexMemory);
+    VkDeviceMemory hostVisibleVertexMemory;
+    vkAllocateMemory(device, &vertexAttBufferMemAllocInfo, nullAllocator, &hostVisibleVertexMemory);
+    vkBindBufferMemory(device, hostVisibleVertexBuffer, hostVisibleVertexMemory, 0/*memory offset*/);
 
     // Map staging memory and copy to staging buffer
-    void *stagingVertexMemoryCopyPtr;
-    *vertexBufferOffset = 0;
-    vkMapMemory(device, stagingVertexMemory, *vertexBufferOffset, vertexAttBufferMemAllocInfo.allocationSize, 0/*flags*/, &stagingVertexMemoryCopyPtr);
-    memcpy(stagingVertexMemoryCopyPtr, fullScreenQuadVertexAttData, fullScreenQuadVertexAttDataSize);
-    stagingVertexMemoryCopyPtr = nullptr;
-    vkUnmapMemory(device, stagingVertexMemory);
-
-    // repeat above for index data
-    void *stagingIndexMemoryCopyPtr;
-    *indexBufferOffset = fullScreenQuadVertexAttDataSize;
-    vkMapMemory(device, stagingVertexMemory, *indexBufferOffset, fullScreenQuadIndexDataSize, 0, &stagingIndexMemoryCopyPtr);
-    memcpy(stagingIndexMemoryCopyPtr, fullScreenQuadIndexData, fullScreenQuadIndexDataSize);
-    stagingIndexMemoryCopyPtr = nullptr;
-    vkUnmapMemory(device, stagingVertexMemory);
-
-    vkBindBufferMemory(device, stagingVertexBuffer, stagingVertexMemory, 0/*memory offset*/);
+    char* hostVisibleMemoryCopyPtr;
+    vkMapMemory(device, hostVisibleVertexMemory, vulkanContext->vertexAtt.verticesOffset, vertexAttBufferMemAllocInfo.allocationSize, 0/*flags*/, (void**)&hostVisibleMemoryCopyPtr);
+      memcpy(hostVisibleMemoryCopyPtr, fullScreenQuadVertexAttData, fullScreenQuadVertexAttDataSize); // copy over vertex attribute data
+      memcpy(hostVisibleMemoryCopyPtr + vulkanContext->vertexAtt.indicesOffset, fullScreenQuadIndexData, fullScreenQuadIndexDataSize); // copy over index data
+      hostVisibleMemoryCopyPtr = nullptr;
+    vkUnmapMemory(device, hostVisibleVertexMemory);
 
     // Create destination buffer with device only visibility
     VkBufferCreateInfo deviceLocalVertexBufferInfo = {};
     deviceLocalVertexBufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
     deviceLocalVertexBufferInfo.size = totalBufferSize;
-    // TODO: Performance test to check if using VK_BUFFER_USAGE_VERTEX_BUFFER_BIT & VK_BUFFER_USAGE_INDEX_BUFFER_BIT
-    // slows us down due to driver implementation using these flags
-    deviceLocalVertexBufferInfo.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT; // device local buffer to  be used for rendering
+    deviceLocalVertexBufferInfo.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT; // device local buffer to be used for rendering
 
-    vkCreateBuffer(device, &deviceLocalVertexBufferInfo, nullAllocator, vertexAttBuffer);
+    vkCreateBuffer(device, &deviceLocalVertexBufferInfo, nullAllocator, &vulkanContext->vertexAtt.buffer);
+    vulkanContext->vertexAtt.bufferOffset = 0;
+    VkMemoryRequirements deviceLocalVertexAttBufferMemReqs;
+    vkGetBufferMemoryRequirements(device, vulkanContext->vertexAtt.buffer, &deviceLocalVertexAttBufferMemReqs);
+    vertexAttBufferMemAllocInfo.allocationSize = deviceLocalVertexAttBufferMemReqs.size;
+    vertexAttBufferMemAllocInfo.memoryTypeIndex = getMemoryTypeIndex(&vulkanContext->device.memoryProperties, deviceLocalVertexAttBufferMemReqs.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
 
-    vkGetBufferMemoryRequirements(device, *vertexAttBuffer, &vertexAttBufferMemReqs);
-    vertexAttBufferMemAllocInfo.allocationSize = vertexAttBufferMemReqs.size;
-    vertexAttBufferMemAllocInfo.memoryTypeIndex = getMemoryTypeIndex(deviceMemoryProperties, vertexAttBufferMemReqs.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-    vkAllocateMemory(device, &vertexAttBufferMemAllocInfo, nullAllocator, vertexAttMemory);
-
-    vkBindBufferMemory(device, *vertexAttBuffer, *vertexAttMemory, 0);
+    vkAllocateMemory(device, &vertexAttBufferMemAllocInfo, nullAllocator, &vulkanContext->vertexAtt.memory);
+    vkBindBufferMemory(device, vulkanContext->vertexAtt.buffer, vulkanContext->vertexAtt.memory, 0);
 
     // Buffer copies have to be submitted to a queue, so we need a command buffer
     VkCommandBufferAllocateInfo commandBufferAllocateInfo = {};
     commandBufferAllocateInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-    commandBufferAllocateInfo.commandPool = vulkanContext->commandPool;
+    commandBufferAllocateInfo.commandPool = vulkanContext->transferCommandPool;
     commandBufferAllocateInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
     commandBufferAllocateInfo.commandBufferCount = 1;
 
@@ -706,15 +749,13 @@ void initVertexAttributes(VulkanContext* vulkanContext)
     if (vkBeginCommandBuffer(copyCommandBuffer, &commandBufferBeginInfo) != VK_SUCCESS) {
         throw std::runtime_error("failed to begin recording command buffer for staging vertex/index buffers !");
     }
-
-    // Put buffer region copies into command buffer
-    VkBufferCopy copyRegion;
-    copyRegion.srcOffset = 0;
-    copyRegion.dstOffset = 0;
-    // Vertex buffer
-    copyRegion.size = totalBufferSize;
-    vkCmdCopyBuffer(copyCommandBuffer, stagingVertexBuffer, *vertexAttBuffer, 1/* region count */, &copyRegion);
-
+      // Put buffer region copies into command buffer
+      VkBufferCopy copyRegion;
+      copyRegion.srcOffset = 0;
+      copyRegion.dstOffset = 0;
+      // Vertex buffer
+      copyRegion.size = totalBufferSize;
+      vkCmdCopyBuffer(copyCommandBuffer, hostVisibleVertexBuffer, vulkanContext->vertexAtt.buffer, 1/* region count */, &copyRegion);
     vkEndCommandBuffer(copyCommandBuffer);
 
     VkSubmitInfo copyCommandSubmitInfo = {};
@@ -722,7 +763,7 @@ void initVertexAttributes(VulkanContext* vulkanContext)
     copyCommandSubmitInfo.commandBufferCount = 1;
     copyCommandSubmitInfo.pCommandBuffers = &copyCommandBuffer;
 
-    // Create fence to ensure that the command buffer has finished executing
+    // Create fence to wait for transfer to complete
     VkFenceCreateInfo copyFenceCreateInfo = {};
     copyFenceCreateInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
     copyFenceCreateInfo.flags = 0;
@@ -736,14 +777,18 @@ void initVertexAttributes(VulkanContext* vulkanContext)
     vkWaitForFences(device, 1, &copyFence, VK_TRUE, DEFAULT_FENCE_TIMEOUT);
 
     vkDestroyFence(device, copyFence, nullAllocator);
-    vkFreeCommandBuffers(device, vulkanContext->commandPool, 1, &copyCommandBuffer);
+    vkFreeCommandBuffers(device, vulkanContext->transferCommandPool, 1, &copyCommandBuffer);
 
     // Destroy staging buffers
     // Note: Staging buffer must not be deleted before the copies have been submitted and executed
-    vkDestroyBuffer(device, stagingVertexBuffer, nullAllocator);
-    vkFreeMemory(device, stagingVertexMemory, nullAllocator);
+    vkDestroyBuffer(device, hostVisibleVertexBuffer, nullAllocator);
+    vkFreeMemory(device, hostVisibleVertexMemory, nullAllocator);
 }
 
+/*
+ * - Create semaphores to wait between queue commands & command buffers
+ * - Create fences that will be used to wait for completion of submitted command buffers
+ */
 void initSyncObjects(VulkanContext* vulkanContext) {
     vulkanContext->commandBufferFences = new VkFence[vulkanContext->commandBufferCount];
 
@@ -754,40 +799,47 @@ void initSyncObjects(VulkanContext* vulkanContext) {
     fenceCI.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
     fenceCI.flags = VK_FENCE_CREATE_SIGNALED_BIT;
 
-    if(vkCreateSemaphore(vulkanContext->device.handle, &semaphoreCI, nullAllocator, &vulkanContext->semaphores.present) != VK_SUCCESS ||
-       vkCreateSemaphore(vulkanContext->device.handle, &semaphoreCI, nullAllocator, &vulkanContext->semaphores.render) != VK_SUCCESS) {
+    if(vkCreateSemaphore(vulkanContext->device.logical, &semaphoreCI, nullAllocator, &vulkanContext->semaphores.present) != VK_SUCCESS ||
+       vkCreateSemaphore(vulkanContext->device.logical, &semaphoreCI, nullAllocator, &vulkanContext->semaphores.render) != VK_SUCCESS) {
             throw std::runtime_error("failed to create semaphores!");
     }
     for(uint32 i = 0; i < vulkanContext->commandBufferCount; ++i) {
-        if (vkCreateFence(vulkanContext->device.handle, &fenceCI, nullAllocator, vulkanContext->commandBufferFences + i) != VK_SUCCESS) {
+        if (vkCreateFence(vulkanContext->device.logical, &fenceCI, nullAllocator, vulkanContext->commandBufferFences + i) != VK_SUCCESS) {
             throw std::runtime_error("failed to create fences!");
         }
     }
 }
 
 void initVulkan(GLFWwindow* window, VulkanContext* vulkanContext) {
-    vulkanContext->windowExtent.width = INITIAL_VIEWPORT_WIDTH;
-    vulkanContext->windowExtent.height = INITIAL_VIEWPORT_HEIGHT;
+    vulkanContext->windowExtent = { INITIAL_VIEWPORT_WIDTH, INITIAL_VIEWPORT_HEIGHT };
 
     initVulkanInstance(&vulkanContext->instance, &vulkanContext->debugMessenger);
     initSurface(window, &vulkanContext->instance, &vulkanContext->surface);
     pickPhysicalDevice(vulkanContext);
 
-    initLogicalDeviceAndQueues(&vulkanContext->device.handle, &vulkanContext->device.physical, &vulkanContext->device.queueFamilyIndices);
-    vkGetDeviceQueue(vulkanContext->device.handle, vulkanContext->device.queueFamilyIndices.graphics, 0, &vulkanContext->graphicsQueue);
-    vkGetDeviceQueue(vulkanContext->device.handle, vulkanContext->device.queueFamilyIndices.present, 0, &vulkanContext->presentQueue);
-    vkGetDeviceQueue(vulkanContext->device.handle, vulkanContext->device.queueFamilyIndices.transfer, 0, &vulkanContext->transferQueue);
+    initLogicalDeviceAndQueues(&vulkanContext->device.logical, &vulkanContext->device.physical, &vulkanContext->device.queueFamilyIndices);
+    vkGetDeviceQueue(vulkanContext->device.logical, vulkanContext->device.queueFamilyIndices.graphics, 0, &vulkanContext->graphicsQueue);
+    vkGetDeviceQueue(vulkanContext->device.logical, vulkanContext->device.queueFamilyIndices.present, 0, &vulkanContext->presentQueue);
+    vkGetDeviceQueue(vulkanContext->device.logical, vulkanContext->device.queueFamilyIndices.transfer, 0, &vulkanContext->transferQueue);
+
     initSwapChain(vulkanContext);
-    initImageViews(&vulkanContext->device.handle, &vulkanContext->swapChain);
-    initRenderPass(&vulkanContext->device.handle, &vulkanContext->swapChain, &vulkanContext->renderPass);
+    initImageViews(&vulkanContext->device.logical, &vulkanContext->swapChain);
+    initRenderPass(&vulkanContext->device.logical, vulkanContext->swapChain.format, &vulkanContext->renderPass);
     initGraphicsPipeline(vulkanContext);
     initFramebuffers(vulkanContext);
-    initCommandPool(&vulkanContext->device.handle, &vulkanContext->commandPool, &vulkanContext->device.queueFamilyIndices);
+  initCommandPools(vulkanContext);
     initCommandBuffers(vulkanContext);
     initSyncObjects(vulkanContext);
-    initVertexAttributes(vulkanContext);
+  prepareVertexAttributeMemory(vulkanContext);
 }
 
+/*
+ * TLDR:
+ * - Sets app name/version, engine name/version
+ * - Specify vulkan API version
+ * - Specify extensions: GLFW extension, debug utils extension
+ * - Specify layers: Debug validation layer
+ */
 void initVulkanInstance(VkInstance* vulkanInstance, VkDebugUtilsMessengerEXT* debugMessenger) {
     if(enableValidationLayers && !checkValidationLayerSupport()) {
         throw std::runtime_error("validation layers requested but not found");
@@ -799,7 +851,7 @@ void initVulkanInstance(VkInstance* vulkanInstance, VkDebugUtilsMessengerEXT* de
     appInfo.applicationVersion = VK_MAKE_VERSION(1, 0, 0);
     appInfo.pEngineName = ENGINE_NAME;
     appInfo.engineVersion = VK_MAKE_VERSION(1, 0, 0);
-    appInfo.apiVersion = VK_API_VERSION_1_0;
+    appInfo.apiVersion = VK_MAKE_VERSION(1, 2, 0);
 
     VkInstanceCreateInfo instanceCI{};
     instanceCI.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
@@ -939,35 +991,40 @@ void printAvailableExtensions() {
 
 void destroyImageViews(VulkanContext* vulkanContext) {
   for(uint32 i = 0; i < vulkanContext->swapChain.imageCount; ++i) {
-    vkDestroyImageView(vulkanContext->device.handle, vulkanContext->swapChain.imageViews[i], nullAllocator);
+    vkDestroyImageView(vulkanContext->device.logical, vulkanContext->swapChain.imageViews[i], nullAllocator);
   }
 }
 
 void cleanup(GLFWwindow* window, VulkanContext* vulkanContext) {
+  deinitializeInput();
+
     if(enableValidationLayers) {
         DestroyDebugUtilsMessengerEXT(&vulkanContext->instance, &vulkanContext->debugMessenger, nullAllocator);
     }
 
     // NOTE: No need to call vkFreeCommandBuffers as they get freed when the command pool is destroyed
-    vkDestroyCommandPool(vulkanContext->device.handle, vulkanContext->commandPool, nullAllocator);
+    vkDestroyCommandPool(vulkanContext->device.logical, vulkanContext->graphicsCommandPool, nullAllocator);
+    if(vulkanContext->graphicsCommandPool != vulkanContext->transferCommandPool) {
+      vkDestroyCommandPool(vulkanContext->device.logical, vulkanContext->transferCommandPool, nullAllocator);
+    }
 
     destroyFramebuffers(vulkanContext);
     destroyImageViews(vulkanContext);
 
     for(uint32 i = 0; i < vulkanContext->commandBufferCount; ++i) {
-        vkDestroyFence(vulkanContext->device.handle, vulkanContext->commandBufferFences[i], nullAllocator);
+        vkDestroyFence(vulkanContext->device.logical, vulkanContext->commandBufferFences[i], nullAllocator);
     }
-    vkDestroySemaphore(vulkanContext->device.handle, vulkanContext->semaphores.render, nullAllocator);
-    vkDestroySemaphore(vulkanContext->device.handle, vulkanContext->semaphores.present, nullAllocator);
+    vkDestroySemaphore(vulkanContext->device.logical, vulkanContext->semaphores.render, nullAllocator);
+    vkDestroySemaphore(vulkanContext->device.logical, vulkanContext->semaphores.present, nullAllocator);
 
-    vkDestroyBuffer(vulkanContext->device.handle, vulkanContext->vertexAtt.buffer, nullAllocator);
-    vkFreeMemory(vulkanContext->device.handle, vulkanContext->vertexAtt.memory, nullAllocator);
-    vkDestroyRenderPass(vulkanContext->device.handle, vulkanContext->renderPass, nullAllocator);
-    vkDestroyPipeline(vulkanContext->device.handle, vulkanContext->graphicsPipeline, nullAllocator);
-    vkDestroyPipelineLayout(vulkanContext->device.handle, vulkanContext->pipelineLayout, nullAllocator);
-    vkDestroySwapchainKHR(vulkanContext->device.handle, vulkanContext->swapChain.handle, nullAllocator);
+    vkDestroyBuffer(vulkanContext->device.logical, vulkanContext->vertexAtt.buffer, nullAllocator);
+    vkFreeMemory(vulkanContext->device.logical, vulkanContext->vertexAtt.memory, nullAllocator);
+    vkDestroyRenderPass(vulkanContext->device.logical, vulkanContext->renderPass, nullAllocator);
+    vkDestroyPipeline(vulkanContext->device.logical, vulkanContext->graphicsPipeline, nullAllocator);
+    vkDestroyPipelineLayout(vulkanContext->device.logical, vulkanContext->pipelineLayout, nullAllocator);
+    vkDestroySwapchainKHR(vulkanContext->device.logical, vulkanContext->swapChain.handle, nullAllocator);
     vkDestroySurfaceKHR(vulkanContext->instance, vulkanContext->surface, nullAllocator);
-    vkDestroyDevice(vulkanContext->device.handle, nullAllocator);
+    vkDestroyDevice(vulkanContext->device.logical, nullAllocator);
     vkDestroyInstance(vulkanContext->instance, nullAllocator);
     
     delete[] vulkanContext->swapChain.images;
@@ -983,55 +1040,60 @@ void cleanup(GLFWwindow* window, VulkanContext* vulkanContext) {
 void destroyFramebuffers(VulkanContext* vulkanContext)
 {
   for(uint32 i = 0; i < vulkanContext->swapChain.framebufferCount; ++i) {
-    vkDestroyFramebuffer(vulkanContext->device.handle, vulkanContext->swapChain.framebuffers[i], nullAllocator);
+    vkDestroyFramebuffer(vulkanContext->device.logical, vulkanContext->swapChain.framebuffers[i], nullAllocator);
   }
 }
 
+/*
+ * - Create framebuffers that are linked to the swap chain's images (through image views)
+ */
 void initFramebuffers(VulkanContext* vulkanContext)
 {
-  VkDevice* logicalDevice = &vulkanContext->device.handle;
   SwapChain* swapChain = &vulkanContext->swapChain;
-  VkRenderPass* renderPass = &vulkanContext->renderPass;
   swapChain->framebufferCount = swapChain->imageCount;
   swapChain->framebuffers = new VkFramebuffer[swapChain->framebufferCount];
 
   for (uint32 i = 0; i < swapChain->framebufferCount; ++i) {
     VkFramebufferCreateInfo framebufferCI{};
     framebufferCI.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
-    framebufferCI.renderPass = *renderPass;
+    framebufferCI.renderPass = vulkanContext->renderPass;
     framebufferCI.attachmentCount = 1;
     framebufferCI.pAttachments = &swapChain->imageViews[i];
     framebufferCI.width = swapChain->extent.width;
     framebufferCI.height = swapChain->extent.height;
     framebufferCI.layers = 1;
 
-    if (vkCreateFramebuffer(*logicalDevice, &framebufferCI, nullAllocator, &swapChain->framebuffers[i]) != VK_SUCCESS) {
+    if (vkCreateFramebuffer(vulkanContext->device.logical, &framebufferCI, nullAllocator, &swapChain->framebuffers[i]) != VK_SUCCESS) {
       throw std::runtime_error("failed to create framebuffer!");
     }
   }
 }
 
+/*
+ * - Allocate primary command buffers from the VulkanContext.graphicsCommandPool to be used along size the swap chain's framebuffers
+ */
 void initCommandBuffers(VulkanContext* vulkanContext)
 {
-  VkDevice* logicalDevice = &vulkanContext->device.handle;
-  VkCommandPool* commandPool = &vulkanContext->commandPool;
-  SwapChain* swapChain = &vulkanContext->swapChain;
-
-  vulkanContext->commandBufferCount = swapChain->framebufferCount;
+  vulkanContext->commandBufferCount = vulkanContext->swapChain.framebufferCount;
   vulkanContext->commandBuffers = new VkCommandBuffer[vulkanContext->commandBufferCount];
 
   VkCommandBufferAllocateInfo commandBufferAllocateInfo{};
   commandBufferAllocateInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-  commandBufferAllocateInfo.commandPool = *commandPool;
+  commandBufferAllocateInfo.commandPool = vulkanContext->graphicsCommandPool;
   // Primary level allows us to submit directly to a queue for execution, secondary level allows us to reference from another command buffer
   commandBufferAllocateInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
   commandBufferAllocateInfo.commandBufferCount = vulkanContext->commandBufferCount;
 
-  if (vkAllocateCommandBuffers(*logicalDevice, &commandBufferAllocateInfo, vulkanContext->commandBuffers) != VK_SUCCESS) {
+  if (vkAllocateCommandBuffers(vulkanContext->device.logical, &commandBufferAllocateInfo, vulkanContext->commandBuffers) != VK_SUCCESS) {
     throw std::runtime_error("failed to allocate command buffers!");
   }
 }
 
+/*
+ * - Create image views that allow us to access swap chain images
+ * - Specify that we want to use hem as 2D images
+ * - Image view format is as specified when creating the swap chain
+ */
 void initImageViews(VkDevice* logicalDevice, SwapChain* swapChain)
 {
   swapChain->imageViews = new VkImageView[swapChain->imageCount];
@@ -1056,39 +1118,55 @@ void initImageViews(VkDevice* logicalDevice, SwapChain* swapChain)
   }
 }
 
-void initRenderPass(VkDevice* logicalDevice, SwapChain* swapChain, VkRenderPass* renderPass)
+/*
+ * Create a render pass by...
+ *    - describing the attachments (in our case only 1 color attachment)
+ *    - specifying dependencies between render passes
+ *    - specifying what we expect to happen before we access the attachments and how we should wait for them
+ *    - specifying what we expect to happen after we finish accessing the attachments and how others should wait for our renderpass
+ */
+void initRenderPass(VkDevice* logicalDevice, VkFormat colorAttachmentFormat, VkRenderPass* renderPass)
 {
   const uint32 colorAttachmentIndex = 0;
-  VkAttachmentDescription attachmentDescs[1] = {{0}};
+  VkAttachmentDescription attachmentDescs[1];
 
-  VkAttachmentDescription* colorAttachmentDesc = attachmentDescs + colorAttachmentIndex;
-  colorAttachmentDesc->format = swapChain->format;
-  colorAttachmentDesc->samples = VK_SAMPLE_COUNT_1_BIT;
-  colorAttachmentDesc->loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-  colorAttachmentDesc->storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-  colorAttachmentDesc->stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-  colorAttachmentDesc->stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-  colorAttachmentDesc->initialLayout = VK_IMAGE_LAYOUT_UNDEFINED; // layout assumed before renderpass
-  colorAttachmentDesc->finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR; // layout to automatically transition to after renderpass
+  attachmentDescs[colorAttachmentIndex].format = colorAttachmentFormat;
+  attachmentDescs[colorAttachmentIndex].samples = VK_SAMPLE_COUNT_1_BIT;
+  attachmentDescs[colorAttachmentIndex].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+  attachmentDescs[colorAttachmentIndex].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+  attachmentDescs[colorAttachmentIndex].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+  attachmentDescs[colorAttachmentIndex].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+  attachmentDescs[colorAttachmentIndex].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED; // layout assumed before render pass
+  attachmentDescs[colorAttachmentIndex].finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR; // layout to automatically transition to after render pass
+  attachmentDescs[colorAttachmentIndex].flags = 0;
 
-  VkAttachmentReference colorAttachmentRefs[1] = {{0}};
+  VkAttachmentReference colorAttachmentRefs[1];
   colorAttachmentRefs[0].attachment = colorAttachmentIndex;
   colorAttachmentRefs[0].layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
 
-  VkSubpassDescription subpassDescs[1] = {{0}};
+  VkSubpassDescription subpassDescs[1];
   subpassDescs[0].pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
   subpassDescs[0].colorAttachmentCount = 1;
   // NOTE: The index of the attachments in this array are directly referenced in the fragment shader
   // ex: "layout(location = 0) out vec4 outColor" represents the color attachment ref with index 0
   subpassDescs[0].pColorAttachments = colorAttachmentRefs;
+  subpassDescs[0].pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+  subpassDescs[0].inputAttachmentCount = 0;
+  subpassDescs[0].pInputAttachments = nullptr;
+  subpassDescs[0].preserveAttachmentCount = 0;
+  subpassDescs[0].pPreserveAttachments = nullptr;
+  subpassDescs[0].pDepthStencilAttachment = nullptr;
+  subpassDescs[0].pResolveAttachments = nullptr;
+  subpassDescs[0].flags = 0;
 
-  VkSubpassDependency subpassDependencies[1] = {{0}};
-  subpassDependencies[0].srcSubpass = VK_SUBPASS_EXTERNAL;
-  subpassDependencies[0].dstSubpass = 0;
-  subpassDependencies[0].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-  subpassDependencies[0].srcAccessMask = 0;
-  subpassDependencies[0].dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-  subpassDependencies[0].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+  VkSubpassDependency subpassDependencies[1];
+  subpassDependencies[0].srcSubpass = VK_SUBPASS_EXTERNAL; // no specified subpass before
+  subpassDependencies[0].dstSubpass = VK_SUBPASS_EXTERNAL; // no specified subpass after
+  subpassDependencies[0].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT; // We must wait for color attachment to be freed up (may be in use by swap chain)
+  subpassDependencies[0].srcAccessMask = 0; // We do not care why it was being accessed previous to our uses
+  subpassDependencies[0].dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT; // We should be waited on if we are using the color attachment
+  subpassDependencies[0].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT; // and specifically writing to it
+  subpassDependencies[0].dependencyFlags = 0;
 
   VkRenderPassCreateInfo renderPassCI{};
   renderPassCI.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
@@ -1104,6 +1182,20 @@ void initRenderPass(VkDevice* logicalDevice, SwapChain* swapChain, VkRenderPass*
   }
 }
 
+/*
+ * - Read in vertex/fragment shader files and create associated shader modules
+ * - Creates vertex/fragment pipeline shader stages based on shader modules
+ * - Specify vertex attributes to be used as the pipeline's vertex input
+ *    - input rate, stride, binding point(used in vkCmdBindVertexBuffers), location, format, offset
+ * - Specify topology of vertex data [ex: triangle list, triangle strip, points, lines]
+ * - Specify the viewport extent w/ offset (which defines NDCs) and scissor extent w/ offset (which defines the portion
+ *                                                                           of the viewport that is actually drawn to)
+ * - Specify various state like line width, fill mode, cull mode, winding order
+ * - Specify multi-sampling (only 1 sample in our case)
+ * - Specify color & alpha blending between draw calls
+ * - Create a pipeline with all of the above + render pass(es)
+ * - TODO: Specify descriptor set layouts and push constants
+ */
 void initGraphicsPipeline(VulkanContext* vulkanContext)
 {
   // Shader initialization
@@ -1119,7 +1211,7 @@ void initGraphicsPipeline(VulkanContext* vulkanContext)
   vertShaderModuleCI.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
   vertShaderModuleCI.codeSize = vertShaderSize;
   vertShaderModuleCI.pCode = (const uint32*) vertexShaderFile; // Note: there may be concerns with data alignment
-  if(vkCreateShaderModule(vulkanContext->device.handle, &vertShaderModuleCI, nullAllocator, &vertexShaderModule) != VK_SUCCESS) {
+  if(vkCreateShaderModule(vulkanContext->device.logical, &vertShaderModuleCI, nullAllocator, &vertexShaderModule) != VK_SUCCESS) {
     throw std::runtime_error("failed to create shader module!");
   }
 
@@ -1135,7 +1227,7 @@ void initGraphicsPipeline(VulkanContext* vulkanContext)
   fragShaderModuleCI.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
   fragShaderModuleCI.codeSize = fragShaderSize;
   fragShaderModuleCI.pCode = (const uint32*) fragmentShaderFile;
-  if(vkCreateShaderModule(vulkanContext->device.handle, &fragShaderModuleCI, nullAllocator, &fragmentShaderModule) != VK_SUCCESS) {
+  if(vkCreateShaderModule(vulkanContext->device.logical, &fragShaderModuleCI, nullAllocator, &fragmentShaderModule) != VK_SUCCESS) {
     throw std::runtime_error("failed to create shader module!");
   }
 
@@ -1156,7 +1248,7 @@ void initGraphicsPipeline(VulkanContext* vulkanContext)
   // vertex attributes
   VkVertexInputBindingDescription vertexInputBindingDesc = {};
   // the binding point index is used when describing the attributes and when binding vertex buffers with draw commands
-  vertexInputBindingDesc.binding = VERTEX_INPUT_BINDING_INDEX;
+  vertexInputBindingDesc.binding = QUAD_VERTEX_INPUT_BINDING_INDEX;
   vertexInputBindingDesc.stride = sizeof(PosColVertexAtt);
   vertexInputBindingDesc.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
 
@@ -1165,7 +1257,7 @@ void initGraphicsPipeline(VulkanContext* vulkanContext)
 
   // Attribute location 0: Position
   // GLSL: layout (location = 0) in vec3 inPos;
-  vertexInputAttributes[0].binding = VERTEX_INPUT_BINDING_INDEX;
+  vertexInputAttributes[0].binding = QUAD_VERTEX_INPUT_BINDING_INDEX;
   vertexInputAttributes[0].location = 0;
   // Position attr is three 32 bit signed (SFLOAT) floats (R32 G32 B32)
   vertexInputAttributes[0].format = VK_FORMAT_R32G32B32_SFLOAT;
@@ -1173,7 +1265,7 @@ void initGraphicsPipeline(VulkanContext* vulkanContext)
 
   // Attribute location 1: Color
   // GLSL: layout (location = 1) in vec3 inColor;
-  vertexInputAttributes[1].binding = VERTEX_INPUT_BINDING_INDEX;
+  vertexInputAttributes[1].binding = QUAD_VERTEX_INPUT_BINDING_INDEX;
   vertexInputAttributes[1].location = 1;
   // Color attr is three 32 bit signed (SFLOAT) floats (R32 G32 B32)
   vertexInputAttributes[1].format = VK_FORMAT_R32G32B32_SFLOAT;
@@ -1261,13 +1353,13 @@ void initGraphicsPipeline(VulkanContext* vulkanContext)
   pipelineLayoutCI.pushConstantRangeCount = 0;
   pipelineLayoutCI.pPushConstantRanges = nullptr;
 
-  if (vkCreatePipelineLayout(vulkanContext->device.handle, &pipelineLayoutCI, nullAllocator, &vulkanContext->pipelineLayout) != VK_SUCCESS) {
+  if (vkCreatePipelineLayout(vulkanContext->device.logical, &pipelineLayoutCI, nullAllocator, &vulkanContext->pipelineLayout) != VK_SUCCESS) {
     throw std::runtime_error("failed to create pipeline layout!");
   }
 
   VkGraphicsPipelineCreateInfo pipelineCI{};
   pipelineCI.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
-  pipelineCI.stageCount = 2;
+  pipelineCI.stageCount = ArrayCount(shaderStages);
   pipelineCI.pStages = shaderStages;
   pipelineCI.pVertexInputState = &vertexInputStateCI;
   pipelineCI.pInputAssemblyState = &inputAssemblyStateCI;
@@ -1276,32 +1368,49 @@ void initGraphicsPipeline(VulkanContext* vulkanContext)
   pipelineCI.pMultisampleState = &multisampleStateCI;
   pipelineCI.pDepthStencilState = nullptr;
   pipelineCI.pColorBlendState = &colorBlendStateCI;
-  pipelineCI.pDynamicState = nullptr;
-  pipelineCI.layout = vulkanContext->pipelineLayout;
+  pipelineCI.pDynamicState = nullptr; // Can be used to dynamically modify the viewport, scissor, line width, stencil reference, etc.
+  pipelineCI.layout = vulkanContext->pipelineLayout; // descriptor set layout and push constant info
   pipelineCI.renderPass = vulkanContext->renderPass;
-  pipelineCI.subpass = 0;
+  pipelineCI.subpass = 0; // index of subpass in render pass where pipeline will be used
   pipelineCI.basePipelineHandle = VK_NULL_HANDLE;
   pipelineCI.basePipelineIndex = -1;
 
-  if (vkCreateGraphicsPipelines(vulkanContext->device.handle, VK_NULL_HANDLE, 1, &pipelineCI, nullAllocator, &vulkanContext->graphicsPipeline) != VK_SUCCESS) {
+  if (vkCreateGraphicsPipelines(vulkanContext->device.logical, VK_NULL_HANDLE, 1, &pipelineCI, nullAllocator, &vulkanContext->graphicsPipeline) != VK_SUCCESS) {
     throw std::runtime_error("failed to create graphics pipeline!");
   }
 
-  vkDestroyShaderModule(vulkanContext->device.handle, vertexShaderModule, nullAllocator);
-  vkDestroyShaderModule(vulkanContext->device.handle, fragmentShaderModule, nullAllocator);
+  vkDestroyShaderModule(vulkanContext->device.logical, vertexShaderModule, nullAllocator);
+  vkDestroyShaderModule(vulkanContext->device.logical, fragmentShaderModule, nullAllocator);
 
   delete[] vertexShaderFile;
   delete[] fragmentShaderFile;
 }
 
-void initCommandPool(VkDevice* logicalDevice, VkCommandPool* commandPool, QueueFamilyIndices* queueFamilyIndices)
+/*
+ * Create a command pool that specifically utilizes our discovered specified graphics queue
+ * NOTE: This command pool may not have present or transfer capabilities
+ */
+void initCommandPools(VulkanContext* vulkanContext)
 {
   VkCommandPoolCreateInfo commandPoolCI{};
   commandPoolCI.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
-  commandPoolCI.queueFamilyIndex = queueFamilyIndices->graphics;
+  commandPoolCI.queueFamilyIndex = vulkanContext->device.queueFamilyIndices.graphics;
   commandPoolCI.flags = 0;
 
-  if (vkCreateCommandPool(*logicalDevice, &commandPoolCI, nullAllocator, commandPool) != VK_SUCCESS) {
+  if (vkCreateCommandPool(vulkanContext->device.logical, &commandPoolCI, nullAllocator, &vulkanContext->graphicsCommandPool) != VK_SUCCESS) {
+    throw std::runtime_error("failed to create graphics command pool!");
+  }
+
+  // TODO: transfer command pool is atually unnecessary as any queue family with VK_QUEUE_GRAPHICS_BIT or VK_QUEUE_COMPUTE_BIT
+  //  implicitly support VK_QUEUE_TRANSFER_BIT operations. Remove transferCommandPool.
+  if(vulkanContext->device.queueFamilyIndices.present == vulkanContext->device.queueFamilyIndices.graphics) {
+    vulkanContext->transferCommandPool = vulkanContext->graphicsCommandPool;
+    return;
+  }
+
+  commandPoolCI.queueFamilyIndex = vulkanContext->device.queueFamilyIndices.present;
+  commandPoolCI.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT; // transfer commands are expected to be short lived
+  if (vkCreateCommandPool(vulkanContext->device.logical, &commandPoolCI, nullAllocator, &vulkanContext->transferCommandPool) != VK_SUCCESS) {
     throw std::runtime_error("failed to create command pool!");
   }
 }
