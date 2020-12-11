@@ -19,6 +19,8 @@
 #include "Util.h"
 #include "Models.h"
 #include "Input.h"
+#include "FileLocations.h"
+#include "VulkanUtil.h"
 
 struct QueueFamilyIndices {
     uint32 graphics;
@@ -123,8 +125,6 @@ bool32 enableValidationLayers = true;
 
 const char* VALIDATION_LAYERS[] = { "VK_LAYER_KHRONOS_validation" };
 const char* DEVICE_EXTENSIONS[] = { VK_KHR_SWAPCHAIN_EXTENSION_NAME };
-const char* VERT_SHADER_FILE_LOC = "test_vertex_shader.vert.spv";
-const char* FRAG_SHADER_FILE_LOC = "test_fragment_shader.frag.spv";
 const char* APP_NAME = "Hello Vulkan";
 const char* ENGINE_NAME = "Kuring";
 
@@ -321,11 +321,11 @@ void populateCommandBuffers(VulkanContext* vulkanContext) {
       // Bind triangle index buffer
       vkCmdBindIndexBuffer(vulkanContext->commandBuffers[i],
                            vulkanContext->vertexAtt.buffer,
-                           fullScreenQuadVertexAttDataSize/*offset in buffer*/,
+                           quadPosColVertexAtt.sizeInBytes/*offset in buffer*/,
                            VK_INDEX_TYPE_UINT32);
 
       // Draw indexed triangle
-      vkCmdDrawIndexed(vulkanContext->commandBuffers[i], fullScreenQuadIndexCount, 1, 0, 0, 1);
+      vkCmdDrawIndexed(vulkanContext->commandBuffers[i], quadIndexCount, 1, 0, 0, 1);
     }
     vkCmdEndRenderPass(vulkanContext->commandBuffers[i]);
 
@@ -663,7 +663,7 @@ uint32 getMemoryTypeIndex(VkPhysicalDeviceMemoryProperties const* deviceMemoryPr
 void prepareVertexAttributeMemory(VulkanContext* vulkanContext)
 {
   vulkanContext->vertexAtt.verticesOffset = 0;
-  vulkanContext->vertexAtt.indicesOffset = fullScreenQuadVertexAttDataSize;
+  vulkanContext->vertexAtt.indicesOffset = quadPosColVertexAtt.sizeInBytes;
 
     VkDevice device = vulkanContext->device.logical;
 
@@ -684,7 +684,7 @@ void prepareVertexAttributeMemory(VulkanContext* vulkanContext)
     // - Delete the host visible (staging) buffer
     // - Use the device local buffers for rendering
 
-    uint32 totalBufferSize = fullScreenQuadVertexAttDataSize + fullScreenQuadIndexDataSize;
+    uint32 totalBufferSize = quadPosColVertexAtt.sizeInBytes + quadIndexDataSize;
 
     // Create a host-visible buffer to copy the vertex data to (staging buffer)
     VkBufferCreateInfo hostVisibleVertexBufferInfo = {};
@@ -710,8 +710,8 @@ void prepareVertexAttributeMemory(VulkanContext* vulkanContext)
     // Map staging memory and copy to staging buffer
     char* hostVisibleMemoryCopyPtr;
     vkMapMemory(device, hostVisibleVertexMemory, vulkanContext->vertexAtt.verticesOffset, vertexAttBufferMemAllocInfo.allocationSize, 0/*flags*/, (void**)&hostVisibleMemoryCopyPtr);
-      memcpy(hostVisibleMemoryCopyPtr, fullScreenQuadVertexAttData, fullScreenQuadVertexAttDataSize); // copy over vertex attribute data
-      memcpy(hostVisibleMemoryCopyPtr + vulkanContext->vertexAtt.indicesOffset, fullScreenQuadIndexData, fullScreenQuadIndexDataSize); // copy over index data
+      memcpy(hostVisibleMemoryCopyPtr, quadPosColVertexAtt.data, quadPosColVertexAtt.sizeInBytes); // copy over vertex attribute data
+      memcpy(hostVisibleMemoryCopyPtr + vulkanContext->vertexAtt.indicesOffset, quadIndexData, quadIndexDataSize); // copy over index data
       hostVisibleMemoryCopyPtr = nullptr;
     vkUnmapMemory(device, hostVisibleVertexMemory);
 
@@ -1198,192 +1198,14 @@ void initRenderPass(VkDevice* logicalDevice, VkFormat colorAttachmentFormat, VkR
  */
 void initGraphicsPipeline(VulkanContext* vulkanContext)
 {
-  // Shader initialization
-  uint32 vertShaderSize;
-  char* vertexShaderFile;
-  VkShaderModule vertexShaderModule;
-
-  readFile(VERT_SHADER_FILE_LOC, &vertShaderSize, nullptr);
-  vertexShaderFile = new char[vertShaderSize];
-  readFile(VERT_SHADER_FILE_LOC, &vertShaderSize, vertexShaderFile);
-
-  VkShaderModuleCreateInfo vertShaderModuleCI{};
-  vertShaderModuleCI.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-  vertShaderModuleCI.codeSize = vertShaderSize;
-  vertShaderModuleCI.pCode = (const uint32*) vertexShaderFile; // Note: there may be concerns with data alignment
-  if(vkCreateShaderModule(vulkanContext->device.logical, &vertShaderModuleCI, nullAllocator, &vertexShaderModule) != VK_SUCCESS) {
-    throw std::runtime_error("failed to create shader module!");
-  }
-
-  char* fragmentShaderFile;
-  uint32 fragShaderSize;
-  VkShaderModule fragmentShaderModule;
-
-  readFile(FRAG_SHADER_FILE_LOC, &fragShaderSize, nullptr);
-  fragmentShaderFile = new char[fragShaderSize];
-  readFile(FRAG_SHADER_FILE_LOC, &fragShaderSize, fragmentShaderFile);
-
-  VkShaderModuleCreateInfo fragShaderModuleCI{};
-  fragShaderModuleCI.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-  fragShaderModuleCI.codeSize = fragShaderSize;
-  fragShaderModuleCI.pCode = (const uint32*) fragmentShaderFile;
-  if(vkCreateShaderModule(vulkanContext->device.logical, &fragShaderModuleCI, nullAllocator, &fragmentShaderModule) != VK_SUCCESS) {
-    throw std::runtime_error("failed to create shader module!");
-  }
-
-  VkPipelineShaderStageCreateInfo vertShaderStageCI{};
-  vertShaderStageCI.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-  vertShaderStageCI.stage = VK_SHADER_STAGE_VERTEX_BIT;
-  vertShaderStageCI.module = vertexShaderModule;
-  vertShaderStageCI.pName = "main";
-
-  VkPipelineShaderStageCreateInfo fragShaderStageCI{};
-  fragShaderStageCI.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-  fragShaderStageCI.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
-  fragShaderStageCI.module = fragmentShaderModule;
-  fragShaderStageCI.pName = "main";
-
-  VkPipelineShaderStageCreateInfo shaderStages[] = {vertShaderStageCI, fragShaderStageCI};
-
-  // vertex attributes
-  VkVertexInputBindingDescription vertexInputBindingDesc = {};
-  // the binding point index is used when describing the attributes and when binding vertex buffers with draw commands
-  vertexInputBindingDesc.binding = QUAD_VERTEX_INPUT_BINDING_INDEX;
-  vertexInputBindingDesc.stride = sizeof(PosColVertexAtt);
-  vertexInputBindingDesc.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
-
-  // Input attribute bindings describe shader attribute locations and memory layouts
-  VkVertexInputAttributeDescription vertexInputAttributes[2] = {{0}};
-
-  // Attribute location 0: Position
-  // GLSL: layout (location = 0) in vec3 inPos;
-  vertexInputAttributes[0].binding = QUAD_VERTEX_INPUT_BINDING_INDEX;
-  vertexInputAttributes[0].location = 0;
-  // Position attr is three 32 bit signed (SFLOAT) floats (R32 G32 B32)
-  vertexInputAttributes[0].format = VK_FORMAT_R32G32B32_SFLOAT;
-  vertexInputAttributes[0].offset = offsetof(PosColVertexAtt, position);
-
-  // Attribute location 1: Color
-  // GLSL: layout (location = 1) in vec3 inColor;
-  vertexInputAttributes[1].binding = QUAD_VERTEX_INPUT_BINDING_INDEX;
-  vertexInputAttributes[1].location = 1;
-  // Color attr is three 32 bit signed (SFLOAT) floats (R32 G32 B32)
-  vertexInputAttributes[1].format = VK_FORMAT_R32G32B32_SFLOAT;
-  vertexInputAttributes[1].offset = offsetof(PosColVertexAtt, color);
-
-  // Vertex input state used for pipeline creation
-  VkPipelineVertexInputStateCreateInfo vertexInputStateCI = {};
-  vertexInputStateCI.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
-  vertexInputStateCI.vertexBindingDescriptionCount = 1;
-  vertexInputStateCI.pVertexBindingDescriptions = &vertexInputBindingDesc;
-  vertexInputStateCI.vertexAttributeDescriptionCount = 2;
-  vertexInputStateCI.pVertexAttributeDescriptions = vertexInputAttributes;
-
-  VkPipelineInputAssemblyStateCreateInfo inputAssemblyStateCI{};
-  inputAssemblyStateCI.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
-  inputAssemblyStateCI.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
-  inputAssemblyStateCI.primitiveRestartEnable = VK_FALSE;
-
-  VkViewport viewport{};
-  viewport.x = 0.0f;
-  viewport.y = 0.0f;
-  viewport.width = (float32) vulkanContext->windowExtent.width;
-  viewport.height = (float32) vulkanContext->windowExtent.height;
-  viewport.minDepth = 0.0f;
-  viewport.maxDepth = 1.0f;
-
-  VkRect2D scissor{};
-  scissor.offset = {0, 0};
-  scissor.extent = vulkanContext->windowExtent;
-
-  VkPipelineViewportStateCreateInfo viewportStateCI{};
-  viewportStateCI.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
-  viewportStateCI.viewportCount = 1;
-  viewportStateCI.pViewports = &viewport;
-  viewportStateCI.scissorCount = 1;
-  viewportStateCI.pScissors = &scissor;
-
-  VkPipelineRasterizationStateCreateInfo rasterizationStateCI{};
-  rasterizationStateCI.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
-  rasterizationStateCI.depthClampEnable = VK_FALSE;
-  rasterizationStateCI.rasterizerDiscardEnable = VK_FALSE;
-  rasterizationStateCI.polygonMode = VK_POLYGON_MODE_FILL;
-  rasterizationStateCI.lineWidth = 1.0f;
-  rasterizationStateCI.cullMode = VK_CULL_MODE_BACK_BIT;
-  rasterizationStateCI.frontFace = VK_FRONT_FACE_CLOCKWISE;
-  rasterizationStateCI.depthBiasEnable = VK_FALSE;
-  rasterizationStateCI.depthBiasConstantFactor = 0.0f;
-  rasterizationStateCI.depthBiasClamp = 0.0f;
-  rasterizationStateCI.depthBiasSlopeFactor = 0.0f;
-
-  VkPipelineMultisampleStateCreateInfo multisampleStateCI{};
-  multisampleStateCI.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
-  multisampleStateCI.sampleShadingEnable = VK_FALSE;
-  multisampleStateCI.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
-  multisampleStateCI.minSampleShading = 1.0f;
-  multisampleStateCI.pSampleMask = nullptr;
-  multisampleStateCI.alphaToCoverageEnable = VK_FALSE;
-  multisampleStateCI.alphaToOneEnable = VK_FALSE;
-
-  VkPipelineColorBlendAttachmentState colorBlendAttachmentState{};
-  colorBlendAttachmentState.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
-  colorBlendAttachmentState.blendEnable = VK_FALSE;
-  colorBlendAttachmentState.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
-  colorBlendAttachmentState.dstColorBlendFactor = VK_BLEND_FACTOR_ZERO;
-  colorBlendAttachmentState.colorBlendOp = VK_BLEND_OP_ADD;
-  colorBlendAttachmentState.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
-  colorBlendAttachmentState.dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
-  colorBlendAttachmentState.alphaBlendOp = VK_BLEND_OP_ADD;
-
-  VkPipelineColorBlendStateCreateInfo colorBlendStateCI{};
-  colorBlendStateCI.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
-  colorBlendStateCI.logicOpEnable = VK_FALSE;
-  colorBlendStateCI.logicOp = VK_LOGIC_OP_COPY;
-  colorBlendStateCI.attachmentCount = 1;
-  colorBlendStateCI.pAttachments = &colorBlendAttachmentState;
-  colorBlendStateCI.blendConstants[0] = 0.0f;
-  colorBlendStateCI.blendConstants[1] = 0.0f;
-  colorBlendStateCI.blendConstants[2] = 0.0f;
-  colorBlendStateCI.blendConstants[3] = 0.0f;
-
-  VkPipelineLayoutCreateInfo pipelineLayoutCI{};
-  pipelineLayoutCI.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-  pipelineLayoutCI.setLayoutCount = 0; // descriptor set layouts
-  pipelineLayoutCI.pSetLayouts = nullptr; // num descriptor set layouts
-  pipelineLayoutCI.pushConstantRangeCount = 0;
-  pipelineLayoutCI.pPushConstantRanges = nullptr;
-
-  if (vkCreatePipelineLayout(vulkanContext->device.logical, &pipelineLayoutCI, nullAllocator, &vulkanContext->pipelineLayout) != VK_SUCCESS) {
-    throw std::runtime_error("failed to create pipeline layout!");
-  }
-
-  VkGraphicsPipelineCreateInfo pipelineCI{};
-  pipelineCI.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
-  pipelineCI.stageCount = ArrayCount(shaderStages);
-  pipelineCI.pStages = shaderStages;
-  pipelineCI.pVertexInputState = &vertexInputStateCI;
-  pipelineCI.pInputAssemblyState = &inputAssemblyStateCI;
-  pipelineCI.pViewportState = &viewportStateCI;
-  pipelineCI.pRasterizationState = &rasterizationStateCI;
-  pipelineCI.pMultisampleState = &multisampleStateCI;
-  pipelineCI.pDepthStencilState = nullptr;
-  pipelineCI.pColorBlendState = &colorBlendStateCI;
-  pipelineCI.pDynamicState = nullptr; // Can be used to dynamically modify the viewport, scissor, line width, stencil reference, etc.
-  pipelineCI.layout = vulkanContext->pipelineLayout; // descriptor set layout and push constant info
-  pipelineCI.renderPass = vulkanContext->renderPass;
-  pipelineCI.subpass = 0; // index of subpass in render pass where pipeline will be used
-  pipelineCI.basePipelineHandle = VK_NULL_HANDLE;
-  pipelineCI.basePipelineIndex = -1;
-
-  if (vkCreateGraphicsPipelines(vulkanContext->device.logical, VK_NULL_HANDLE, 1, &pipelineCI, nullAllocator, &vulkanContext->graphicsPipeline) != VK_SUCCESS) {
-    throw std::runtime_error("failed to create graphics pipeline!");
-  }
-
-  vkDestroyShaderModule(vulkanContext->device.logical, vertexShaderModule, nullAllocator);
-  vkDestroyShaderModule(vulkanContext->device.logical, fragmentShaderModule, nullAllocator);
-
-  delete[] vertexShaderFile;
-  delete[] fragmentShaderFile;
+  PipelineBuilder(vulkanContext->device.logical)
+            .setVertexShader(VERT_SHADER_FILE_LOC)
+            .setFragmentShader(FRAG_SHADER_FILE_LOC)
+            .setVertexAttributes(quadPosColVertexAtt, QUAD_VERTEX_INPUT_BINDING_INDEX)
+            .setViewport(0.0, 0.0, 0.0, vulkanContext->windowExtent.width, vulkanContext->windowExtent.height, 1.0)
+            .setScissor(0, 0, vulkanContext->windowExtent.width, vulkanContext->windowExtent.height)
+            .setRenderPass(vulkanContext->renderPass)
+            .build(&vulkanContext->graphicsPipeline, &vulkanContext->pipelineLayout);
 }
 
 /*
