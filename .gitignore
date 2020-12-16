@@ -1,8 +1,7 @@
-/build
+/cmake-build-debug-visual-studio-x64
 *.lnk
 *.ini
 /misc
 /.idea
 /cmake-build-debug
 /cmake-build-debug-visual-studio
-CMakeLists.txt

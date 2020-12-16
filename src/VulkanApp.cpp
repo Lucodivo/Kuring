@@ -14,6 +14,12 @@
 #define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
 
+#define GLM_FORCE_RADIANS
+#include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
+
+#include <chrono>
+
 #include "VulkanApp.h"
 #include "Platform.h"
 #include "Util.h"
@@ -21,6 +27,7 @@
 #include "Input.h"
 #include "FileLocations.h"
 #include "VulkanUtil.h"
+#include "UniformStructs.h"
 
 struct QueueFamilyIndices {
     uint32 graphics;
@@ -58,10 +65,22 @@ struct VulkanContext {
   VkFence* commandBufferFences;
 
   struct {
+    VkDescriptorPool descriptorPool;
+    VkDescriptorSet* descriptorSets;
+    VkDescriptorSetLayout descriptorSetLayout;
+    VkDeviceMemory memory;
+    VkBuffer buffer;
+    uint32* offsets;
+    uint32 count;
+    uint32 alignment;
+  } uniformBuffers;
+
+  struct {
     VkDevice logical;
     VkPhysicalDevice physical;
     VkPhysicalDeviceMemoryProperties memoryProperties;
     QueueFamilyIndices queueFamilyIndices;
+    VkDeviceSize minUniformBufferOffsetAlignment;
   } device;
 
   struct{
@@ -70,6 +89,7 @@ struct VulkanContext {
   } semaphores;
 
   struct {
+      VertexAtt info;
       VkDeviceMemory memory;
       VkBuffer buffer;
       VkDeviceSize bufferOffset;
@@ -103,16 +123,23 @@ void processKeyboardInput();
 void initFramebuffers(VulkanContext* vulkanContext);
 void destroyFramebuffers(VulkanContext* vulkanContext);
 void initImageViews(VkDevice* logicalDevice, SwapChain* swapChain);
+void initDescriptorSetLayout(VulkanContext* vulkanContext);
 void destroyImageViews(VulkanContext* vulkanContext);
-void initCommandBuffers(VulkanContext* vulkanContext);
+void initSwapChainCommandBuffers(VulkanContext* vulkanContext);
 void populateCommandBuffers(VulkanContext* vulkanContext);
 void initSwapChain(VulkanContext* vulkanContext);
 void initRenderPass(VkDevice* logicalDevice, VkFormat colorAttachmentFormat, VkRenderPass* renderPass);
+void initUniformBuffers(VulkanContext* vulkanContext); // TODO:
 void initGraphicsPipeline(VulkanContext* vulkanContext);
 void initCommandPools(VulkanContext* vulkanContext);
+void prepareUniformBufferMemory(VulkanContext* vulkanContext);
+void initDescriptorPool(VulkanContext* vulkanContext);
+void initDescriptorSets(VulkanContext* vulkanContext);
 
 const uint32 INITIAL_VIEWPORT_WIDTH = 1200;
 const uint32 INITIAL_VIEWPORT_HEIGHT = 1200;
+
+const uint32 TRANS_MATS_UNIFORM_BUFFER_BINDING_INDEX = 0;
 
 const uint32 QUAD_VERTEX_INPUT_BINDING_INDEX = 0;
 const uint64 DEFAULT_FENCE_TIMEOUT = 100000000000;
@@ -179,6 +206,9 @@ void recreateSwapChain(VulkanContext* vulkanContext)
   vkDeviceWaitIdle(vulkanContext->device.logical);
 
   // cleanup
+  vkDestroyBuffer(vulkanContext->device.logical, vulkanContext->uniformBuffers.buffer, nullAllocator);
+  vkFreeMemory(vulkanContext->device.logical, vulkanContext->uniformBuffers.memory, nullAllocator);
+  vkFreeMemory(vulkanContext->device.logical, vulkanContext->uniformBuffers.memory, nullAllocator);
   destroyFramebuffers(vulkanContext);
   vkFreeCommandBuffers(vulkanContext->device.logical, vulkanContext->graphicsCommandPool, vulkanContext->commandBufferCount, vulkanContext->commandBuffers);
   vkDestroyPipeline(vulkanContext->device.logical, vulkanContext->graphicsPipeline, nullAllocator);
@@ -193,15 +223,37 @@ void recreateSwapChain(VulkanContext* vulkanContext)
   initImageViews(&vulkanContext->device.logical, &vulkanContext->swapChain);
   // Our render pass' color attachment image format is currently directly related to our swap chain's image format
   initRenderPass(&vulkanContext->device.logical, vulkanContext->swapChain.format, &vulkanContext->renderPass);
+  // Uniform buffer count depends on number of images in the swap chain
+  prepareUniformBufferMemory(vulkanContext);
+  // descriptor set count depends on swap chain image count
+  initDescriptorPool(vulkanContext);
+  initDescriptorSets(vulkanContext);
   // The graphics pipeline references the render pass and also contains viewport/scissor information that most likely needs to be updated
   initGraphicsPipeline(vulkanContext);
   // Framebuffers references the render pass and, in our situation, are wrappers around image views of the swap chain's images
   initFramebuffers(vulkanContext);
   // Command buffers reference the renderpass, framebuffers, and graphics pipeline
-  initCommandBuffers(vulkanContext);
+  initSwapChainCommandBuffers(vulkanContext);
   populateCommandBuffers(vulkanContext);
 
   // TODO: notify shaders uniforms
+}
+
+void updateUniformBuffer(VulkanContext* vulkanContext, uint32 index) {
+  local_access auto startTime = std::chrono::high_resolution_clock::now();
+
+  auto currentTime = std::chrono::high_resolution_clock::now();
+  float32 time = std::chrono::duration<float, std::chrono::seconds::period>(currentTime - startTime).count();
+
+  TransMats ubo{};
+  ubo.model = glm::rotate(glm::mat4(1.0f), time * glm::radians(90.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+  ubo.view = glm::lookAt(glm::vec3(2.0f, 2.0f, 2.0f), glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+  ubo.proj = glm::perspective(glm::radians(45.0f), (float32)vulkanContext->swapChain.extent.width / vulkanContext->swapChain.extent.height, 0.1f, 10.0f);
+  ubo.proj[1][1] *= -1;
+  void* uniformBufferMemoryPointer;
+  vkMapMemory(vulkanContext->device.logical, vulkanContext->uniformBuffers.memory, vulkanContext->uniformBuffers.offsets[index], sizeof(ubo), 0, &uniformBufferMemoryPointer);
+    memcpy(uniformBufferMemoryPointer, &ubo, sizeof(ubo));
+  vkUnmapMemory(vulkanContext->device.logical, vulkanContext->uniformBuffers.memory);
 }
 
 void drawFrame(VulkanContext* vulkanContext)
@@ -228,6 +280,8 @@ void drawFrame(VulkanContext* vulkanContext)
   if (acquireResult != VK_SUCCESS && acquireResult != VK_SUBOPTIMAL_KHR) {
     throw std::runtime_error("failed to acquire swap chain image!");
   }
+
+  updateUniformBuffer(vulkanContext, swapChainImageIndex);
 
   vkWaitForFences(vulkanContext->device.logical, 1, &vulkanContext->commandBufferFences[swapChainImageIndex], VK_TRUE, UINT64_MAX);
   vkResetFences(vulkanContext->device.logical, 1, &vulkanContext->commandBufferFences[swapChainImageIndex]);
@@ -321,11 +375,25 @@ void populateCommandBuffers(VulkanContext* vulkanContext) {
       // Bind triangle index buffer
       vkCmdBindIndexBuffer(vulkanContext->commandBuffers[i],
                            vulkanContext->vertexAtt.buffer,
-                           quadPosColVertexAtt.sizeInBytes/*offset in buffer*/,
+                           quadPosColVertexAtt.sizeInBytes, // offset in buffer
                            VK_INDEX_TYPE_UINT32);
 
+      vkCmdBindDescriptorSets(vulkanContext->commandBuffers[i],
+              VK_PIPELINE_BIND_POINT_GRAPHICS,
+              vulkanContext->pipelineLayout,
+              0,
+              1,
+              &vulkanContext->uniformBuffers.descriptorSets[i],
+              0,
+              nullptr);
+
       // Draw indexed triangle
-      vkCmdDrawIndexed(vulkanContext->commandBuffers[i], quadIndexCount, 1, 0, 0, 1);
+      vkCmdDrawIndexed(vulkanContext->commandBuffers[i],
+              quadPosColVertexAtt.indices.count,
+              1,
+              0,
+              0,
+              1);
     }
     vkCmdEndRenderPass(vulkanContext->commandBuffers[i]);
 
@@ -626,6 +694,7 @@ void pickPhysicalDevice(VulkanContext* vulkanContext) {
     }
 
     vkGetPhysicalDeviceMemoryProperties(vulkanContext->device.physical, &vulkanContext->device.memoryProperties);
+    vulkanContext->device.minUniformBufferOffsetAlignment = deviceProperties.limits.minUniformBufferOffsetAlignment;
 
     delete[] physicalDevices;
 }
@@ -659,11 +728,13 @@ uint32 getMemoryTypeIndex(VkPhysicalDeviceMemoryProperties const* deviceMemoryPr
  * - Prepare vertex and index buffers for an indexed triangle list
  * - Transfer vertex and index buffers from host visible memory to device local memory
  * - Initialize vertex input and attribute binding to match the vertex shader
+ * - TODO: pass in index data as well
  */
-void prepareVertexAttributeMemory(VulkanContext* vulkanContext)
+void prepareVertexAttributeMemory(VulkanContext* vulkanContext, VertexAtt vertexAtt)
 {
-  vulkanContext->vertexAtt.verticesOffset = 0;
-  vulkanContext->vertexAtt.indicesOffset = quadPosColVertexAtt.sizeInBytes;
+    vulkanContext->vertexAtt.info = vertexAtt;
+    vulkanContext->vertexAtt.verticesOffset = 0;
+    vulkanContext->vertexAtt.indicesOffset = vertexAtt.sizeInBytes;
 
     VkDevice device = vulkanContext->device.logical;
 
@@ -684,7 +755,7 @@ void prepareVertexAttributeMemory(VulkanContext* vulkanContext)
     // - Delete the host visible (staging) buffer
     // - Use the device local buffers for rendering
 
-    uint32 totalBufferSize = quadPosColVertexAtt.sizeInBytes + quadIndexDataSize;
+    uint32 totalBufferSize = vertexAtt.sizeInBytes + vertexAtt.indices.sizeInBytes;
 
     // Create a host-visible buffer to copy the vertex data to (staging buffer)
     VkBufferCreateInfo hostVisibleVertexBufferInfo = {};
@@ -710,8 +781,8 @@ void prepareVertexAttributeMemory(VulkanContext* vulkanContext)
     // Map staging memory and copy to staging buffer
     char* hostVisibleMemoryCopyPtr;
     vkMapMemory(device, hostVisibleVertexMemory, vulkanContext->vertexAtt.verticesOffset, vertexAttBufferMemAllocInfo.allocationSize, 0/*flags*/, (void**)&hostVisibleMemoryCopyPtr);
-      memcpy(hostVisibleMemoryCopyPtr, quadPosColVertexAtt.data, quadPosColVertexAtt.sizeInBytes); // copy over vertex attribute data
-      memcpy(hostVisibleMemoryCopyPtr + vulkanContext->vertexAtt.indicesOffset, quadIndexData, quadIndexDataSize); // copy over index data
+      memcpy(hostVisibleMemoryCopyPtr, vertexAtt.data, vertexAtt.sizeInBytes); // copy over vertex attribute data
+      memcpy(hostVisibleMemoryCopyPtr + vulkanContext->vertexAtt.indicesOffset, vertexAtt.indices.data, vertexAtt.indices.sizeInBytes); // copy over index data
       hostVisibleMemoryCopyPtr = nullptr;
     vkUnmapMemory(device, hostVisibleVertexMemory);
 
@@ -810,6 +881,63 @@ void initSyncObjects(VulkanContext* vulkanContext) {
     }
 }
 
+void initDescriptorSetLayout(VulkanContext* vulkanContext) {
+  VkDescriptorSetLayoutBinding transMatsDescriptorSetLayoutBinding{};
+  transMatsDescriptorSetLayoutBinding.binding = TRANS_MATS_UNIFORM_BUFFER_BINDING_INDEX;
+  transMatsDescriptorSetLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+  transMatsDescriptorSetLayoutBinding.descriptorCount = 1;
+  transMatsDescriptorSetLayoutBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+  transMatsDescriptorSetLayoutBinding.pImmutableSamplers = nullptr;
+
+  VkDescriptorSetLayoutCreateInfo layoutInfo{};
+  layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+  layoutInfo.bindingCount = 1;
+  layoutInfo.pBindings = &transMatsDescriptorSetLayoutBinding;
+
+  if (vkCreateDescriptorSetLayout(vulkanContext->device.logical, &layoutInfo, nullAllocator, &vulkanContext->uniformBuffers.descriptorSetLayout) != VK_SUCCESS) {
+    throw std::runtime_error("failed to create descriptor set layout!");
+  }
+}
+
+void prepareUniformBufferMemory(VulkanContext* vulkanContext) {
+  vulkanContext->uniformBuffers.count = vulkanContext->swapChain.imageCount;
+  uint32 uniformBufferDataSize = sizeof(TransMats);
+  uint32 totalBufferSize = uniformBufferDataSize * vulkanContext->uniformBuffers.count;
+
+  vulkanContext->uniformBuffers.offsets = new uint32[vulkanContext->uniformBuffers.count];
+
+  // Create a host-visible buffer to copy the vertex data to (staging buffer)
+  VkBufferCreateInfo uniformBufferBufferInfo = {};
+  uniformBufferBufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+  uniformBufferBufferInfo.size = totalBufferSize;
+  uniformBufferBufferInfo.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT; // Buffer is used as the copy source
+
+  vkCreateBuffer(vulkanContext->device.logical, &uniformBufferBufferInfo, nullAllocator, &vulkanContext->uniformBuffers.buffer);
+
+  VkMemoryRequirements uniformBufferMemReqs;
+  vkGetBufferMemoryRequirements(vulkanContext->device.logical, vulkanContext->uniformBuffers.buffer, &uniformBufferMemReqs);
+
+  vulkanContext->uniformBuffers.alignment = (uint32)max(uniformBufferMemReqs.alignment, vulkanContext->device.minUniformBufferOffsetAlignment);
+  uint32 alignmentsPerData = (uniformBufferDataSize + vulkanContext->uniformBuffers.alignment - 1) / vulkanContext->uniformBuffers.alignment;
+  uint32 offsetInterval = alignmentsPerData * vulkanContext->uniformBuffers.alignment;
+  uniformBufferBufferInfo.size = offsetInterval * vulkanContext->uniformBuffers.count;
+  vkDestroyBuffer(vulkanContext->device.logical, vulkanContext->uniformBuffers.buffer, nullAllocator);
+  vkCreateBuffer(vulkanContext->device.logical, &uniformBufferBufferInfo, nullAllocator, &vulkanContext->uniformBuffers.buffer);
+  vkGetBufferMemoryRequirements(vulkanContext->device.logical, vulkanContext->uniformBuffers.buffer, &uniformBufferMemReqs);
+
+  VkMemoryAllocateInfo uniformBufferMemAllocInfo = {};
+  uniformBufferMemAllocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+  uniformBufferMemAllocInfo.allocationSize = uniformBufferMemReqs.size;
+  uniformBufferMemAllocInfo.memoryTypeIndex = getMemoryTypeIndex(&vulkanContext->device.memoryProperties, uniformBufferMemReqs.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+
+  vkAllocateMemory(vulkanContext->device.logical, &uniformBufferMemAllocInfo, nullAllocator, &vulkanContext->uniformBuffers.memory);
+  vkBindBufferMemory(vulkanContext->device.logical, vulkanContext->uniformBuffers.buffer, vulkanContext->uniformBuffers.memory, 0/*memory offset*/);
+
+  for(uint32 i = 0; i < vulkanContext->uniformBuffers.count; ++i) {
+    vulkanContext->uniformBuffers.offsets[i] = i * offsetInterval;
+  }
+}
+
 void initVulkan(GLFWwindow* window, VulkanContext* vulkanContext) {
     vulkanContext->windowExtent = { INITIAL_VIEWPORT_WIDTH, INITIAL_VIEWPORT_HEIGHT };
 
@@ -823,14 +951,69 @@ void initVulkan(GLFWwindow* window, VulkanContext* vulkanContext) {
     vkGetDeviceQueue(vulkanContext->device.logical, vulkanContext->device.queueFamilyIndices.transfer, 0, &vulkanContext->transferQueue);
 
     initSwapChain(vulkanContext);
+    initCommandPools(vulkanContext);
+    initSwapChainCommandBuffers(vulkanContext);
+    prepareVertexAttributeMemory(vulkanContext, quadPosColVertexAtt);
+    prepareUniformBufferMemory(vulkanContext);
+    initDescriptorSetLayout(vulkanContext);
+    initDescriptorPool(vulkanContext);
+    initDescriptorSets(vulkanContext);
     initImageViews(&vulkanContext->device.logical, &vulkanContext->swapChain);
     initRenderPass(&vulkanContext->device.logical, vulkanContext->swapChain.format, &vulkanContext->renderPass);
     initGraphicsPipeline(vulkanContext);
     initFramebuffers(vulkanContext);
-  initCommandPools(vulkanContext);
-    initCommandBuffers(vulkanContext);
     initSyncObjects(vulkanContext);
-  prepareVertexAttributeMemory(vulkanContext);
+}
+
+void initDescriptorPool(VulkanContext* vulkanContext)
+{
+  VkDescriptorPoolSize poolSize{};
+  poolSize.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+  poolSize.descriptorCount = vulkanContext->uniformBuffers.count;
+
+  VkDescriptorPoolCreateInfo poolInfo{};
+  poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+  poolInfo.poolSizeCount = 1;
+  poolInfo.pPoolSizes = &poolSize;
+  poolInfo.maxSets = vulkanContext->uniformBuffers.count;
+
+  if (vkCreateDescriptorPool(vulkanContext->device.logical, &poolInfo, nullptr, &vulkanContext->uniformBuffers.descriptorPool) != VK_SUCCESS) {
+    throw std::runtime_error("failed to create descriptor pool!");
+  }
+}
+
+void initDescriptorSets(VulkanContext* vulkanContext) {
+  std::vector<VkDescriptorSetLayout> layouts(vulkanContext->uniformBuffers.count, vulkanContext->uniformBuffers.descriptorSetLayout);
+  VkDescriptorSetAllocateInfo allocInfo{};
+  allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+  allocInfo.descriptorPool = vulkanContext->uniformBuffers.descriptorPool;
+  allocInfo.descriptorSetCount = vulkanContext->uniformBuffers.count;
+  allocInfo.pSetLayouts = layouts.data();
+
+  vulkanContext->uniformBuffers.descriptorSets = new VkDescriptorSet[vulkanContext->uniformBuffers.count];
+  if (vkAllocateDescriptorSets(vulkanContext->device.logical, &allocInfo, vulkanContext->uniformBuffers.descriptorSets) != VK_SUCCESS) {
+    throw std::runtime_error("failed to allocate descriptor sets!");
+  }
+
+  VkDescriptorBufferInfo bufferInfo{};
+  bufferInfo.buffer = vulkanContext->uniformBuffers.buffer;
+  for (size_t i = 0; i < vulkanContext->uniformBuffers.count; ++i) {
+    bufferInfo.offset = vulkanContext->uniformBuffers.offsets[i];
+    bufferInfo.range = vulkanContext->uniformBuffers.alignment;
+
+    VkWriteDescriptorSet descriptorWrite{};
+    descriptorWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    descriptorWrite.dstSet = vulkanContext->uniformBuffers.descriptorSets[i];
+    descriptorWrite.dstBinding = TRANS_MATS_UNIFORM_BUFFER_BINDING_INDEX;
+    descriptorWrite.dstArrayElement = 0;
+    descriptorWrite.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    descriptorWrite.descriptorCount = 1;
+    descriptorWrite.pBufferInfo = &bufferInfo; // used for descriptors that refer to buffer data
+    descriptorWrite.pImageInfo = nullptr; // used for descriptors that refer to image data
+    descriptorWrite.pTexelBufferView = nullptr; // used for descriptors that refer to buffer views
+
+    vkUpdateDescriptorSets(vulkanContext->device.logical, 1, &descriptorWrite, 0, nullptr);
+  }
 }
 
 /*
@@ -870,7 +1053,7 @@ void initVulkanInstance(VkInstance* vulkanInstance, VkDebugUtilsMessengerEXT* de
         instanceCI.ppEnabledLayerNames = VALIDATION_LAYERS;
 
         debugUtilsMessengerCI.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
-        debugUtilsMessengerCI.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
+        debugUtilsMessengerCI.messageSeverity = /*VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT |*/ VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
         debugUtilsMessengerCI.messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
         debugUtilsMessengerCI.pfnUserCallback = debugCallback;
 
@@ -998,33 +1181,39 @@ void destroyImageViews(VulkanContext* vulkanContext) {
 void cleanup(GLFWwindow* window, VulkanContext* vulkanContext) {
   deinitializeInput();
 
+  VkDevice device = vulkanContext->device.logical;
+
     if(enableValidationLayers) {
         DestroyDebugUtilsMessengerEXT(&vulkanContext->instance, &vulkanContext->debugMessenger, nullAllocator);
     }
 
     // NOTE: No need to call vkFreeCommandBuffers as they get freed when the command pool is destroyed
-    vkDestroyCommandPool(vulkanContext->device.logical, vulkanContext->graphicsCommandPool, nullAllocator);
+    vkDestroyCommandPool(device, vulkanContext->graphicsCommandPool, nullAllocator);
     if(vulkanContext->graphicsCommandPool != vulkanContext->transferCommandPool) {
-      vkDestroyCommandPool(vulkanContext->device.logical, vulkanContext->transferCommandPool, nullAllocator);
+      vkDestroyCommandPool(device, vulkanContext->transferCommandPool, nullAllocator);
     }
 
     destroyFramebuffers(vulkanContext);
     destroyImageViews(vulkanContext);
 
     for(uint32 i = 0; i < vulkanContext->commandBufferCount; ++i) {
-        vkDestroyFence(vulkanContext->device.logical, vulkanContext->commandBufferFences[i], nullAllocator);
+        vkDestroyFence(device, vulkanContext->commandBufferFences[i], nullAllocator);
     }
-    vkDestroySemaphore(vulkanContext->device.logical, vulkanContext->semaphores.render, nullAllocator);
-    vkDestroySemaphore(vulkanContext->device.logical, vulkanContext->semaphores.present, nullAllocator);
+    vkDestroySemaphore(device, vulkanContext->semaphores.render, nullAllocator);
+    vkDestroySemaphore(device, vulkanContext->semaphores.present, nullAllocator);
 
-    vkDestroyBuffer(vulkanContext->device.logical, vulkanContext->vertexAtt.buffer, nullAllocator);
-    vkFreeMemory(vulkanContext->device.logical, vulkanContext->vertexAtt.memory, nullAllocator);
-    vkDestroyRenderPass(vulkanContext->device.logical, vulkanContext->renderPass, nullAllocator);
-    vkDestroyPipeline(vulkanContext->device.logical, vulkanContext->graphicsPipeline, nullAllocator);
-    vkDestroyPipelineLayout(vulkanContext->device.logical, vulkanContext->pipelineLayout, nullAllocator);
-    vkDestroySwapchainKHR(vulkanContext->device.logical, vulkanContext->swapChain.handle, nullAllocator);
+    vkDestroyBuffer(device, vulkanContext->uniformBuffers.buffer, nullAllocator);
+    vkFreeMemory(device, vulkanContext->uniformBuffers.memory, nullAllocator);
+    vkDestroyDescriptorPool(device, vulkanContext->uniformBuffers.descriptorPool, nullAllocator);
+    vkDestroyDescriptorSetLayout(device, vulkanContext->uniformBuffers.descriptorSetLayout, nullAllocator);
+    vkDestroyBuffer(device, vulkanContext->vertexAtt.buffer, nullAllocator);
+    vkFreeMemory(device, vulkanContext->vertexAtt.memory, nullAllocator);
+    vkDestroyRenderPass(device, vulkanContext->renderPass, nullAllocator);
+    vkDestroyPipeline(device, vulkanContext->graphicsPipeline, nullAllocator);
+    vkDestroyPipelineLayout(device, vulkanContext->pipelineLayout, nullAllocator);
+    vkDestroySwapchainKHR(device, vulkanContext->swapChain.handle, nullAllocator);
     vkDestroySurfaceKHR(vulkanContext->instance, vulkanContext->surface, nullAllocator);
-    vkDestroyDevice(vulkanContext->device.logical, nullAllocator);
+    vkDestroyDevice(device, nullAllocator);
     vkDestroyInstance(vulkanContext->instance, nullAllocator);
     
     delete[] vulkanContext->swapChain.images;
@@ -1032,6 +1221,8 @@ void cleanup(GLFWwindow* window, VulkanContext* vulkanContext) {
     delete[] vulkanContext->swapChain.imageViews;
     delete[] vulkanContext->commandBuffers;
     delete[] vulkanContext->commandBufferFences;
+    delete[] vulkanContext->uniformBuffers.offsets;
+    delete[] vulkanContext->uniformBuffers.descriptorSets;
     
     glfwDestroyWindow(window);
     glfwTerminate();
@@ -1072,9 +1263,9 @@ void initFramebuffers(VulkanContext* vulkanContext)
 /*
  * - Allocate primary command buffers from the VulkanContext.graphicsCommandPool to be used along size the swap chain's framebuffers
  */
-void initCommandBuffers(VulkanContext* vulkanContext)
+void initSwapChainCommandBuffers(VulkanContext* vulkanContext)
 {
-  vulkanContext->commandBufferCount = vulkanContext->swapChain.framebufferCount;
+  vulkanContext->commandBufferCount = vulkanContext->swapChain.imageCount;
   vulkanContext->commandBuffers = new VkCommandBuffer[vulkanContext->commandBufferCount];
 
   VkCommandBufferAllocateInfo commandBufferAllocateInfo{};
@@ -1161,7 +1352,7 @@ void initRenderPass(VkDevice* logicalDevice, VkFormat colorAttachmentFormat, VkR
 
   VkSubpassDependency subpassDependencies[1];
   subpassDependencies[0].srcSubpass = VK_SUBPASS_EXTERNAL; // no specified subpass before
-  subpassDependencies[0].dstSubpass = VK_SUBPASS_EXTERNAL; // no specified subpass after
+  subpassDependencies[0].dstSubpass = 0; // no specified subpass after
   subpassDependencies[0].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT; // We must wait for color attachment to be freed up (may be in use by swap chain)
   subpassDependencies[0].srcAccessMask = 0; // We do not care why it was being accessed previous to our uses
   subpassDependencies[0].dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT; // We should be waited on if we are using the color attachment
@@ -1199,9 +1390,10 @@ void initRenderPass(VkDevice* logicalDevice, VkFormat colorAttachmentFormat, VkR
 void initGraphicsPipeline(VulkanContext* vulkanContext)
 {
   PipelineBuilder(vulkanContext->device.logical)
-            .setVertexShader(VERT_SHADER_FILE_LOC)
-            .setFragmentShader(FRAG_SHADER_FILE_LOC)
-            .setVertexAttributes(quadPosColVertexAtt, QUAD_VERTEX_INPUT_BINDING_INDEX)
+          .setVertexShader(POS_COLOR_TRANS_MATS_VERT_SHADER_FILE_LOC)
+          .setFragmentShader(VERTEX_COLOR_FRAG_SHADER_FILE_LOC)
+          .setVertexAttributes(quadPosColVertexAtt, QUAD_VERTEX_INPUT_BINDING_INDEX)
+          .setDescriptorSetLayout(&vulkanContext->uniformBuffers.descriptorSetLayout)
             .setViewport(0.0, 0.0, 0.0, vulkanContext->windowExtent.width, vulkanContext->windowExtent.height, 1.0)
             .setScissor(0, 0, vulkanContext->windowExtent.width, vulkanContext->windowExtent.height)
             .setRenderPass(vulkanContext->renderPass)

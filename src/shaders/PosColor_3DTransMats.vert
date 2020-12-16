@@ -1,6 +1,6 @@
 #version 450
 
-// out variable
+// out variables
 // NOTE: Out variables are linearly interpolated between vertices
 layout(location = 0) out vec3 fragColor;
 

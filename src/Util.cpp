@@ -29,7 +29,7 @@ void readFile(const char* filename, uint32* fileSize, char* fileBuffer) {
   std::ifstream file(filename, std::ios::ate | std::ios::binary);
 
   if (!file.is_open()) {
-    throw std::runtime_error("failed to open file!");
+    throw std::runtime_error(std::string("failed to open file:") + filename);
   }
 
   *fileSize = (uint32) file.tellg();

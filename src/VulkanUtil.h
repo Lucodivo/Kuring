@@ -12,7 +12,7 @@ file_access VkPipelineRasterizationStateCreateInfo defaultRasterizationCI {
         VK_FALSE, // depth clamp enabled
         VK_FALSE, // rasterizer discard enabled
         VK_POLYGON_MODE_FILL, // polygon mode
-        VK_CULL_MODE_BACK_BIT, // cull mode
+        VK_CULL_MODE_NONE , // cull mode // TODO: Add back face culling
         VK_FRONT_FACE_CLOCKWISE, // front face
         VK_FALSE, // depth bias enabled
         0.0f, // depth bias constant factor
@@ -58,7 +58,12 @@ file_access VkPipelineColorBlendStateCreateInfo defaultColorBlend{
 class PipelineBuilder {
 public:
 
-  PipelineBuilder(VkDevice logicalDevice, VkAllocationCallbacks* allocator = nullptr): logicalDevice(logicalDevice), allocator(allocator) {}
+  PipelineBuilder(VkDevice logicalDevice, VkAllocationCallbacks* allocator = nullptr): logicalDevice(logicalDevice), allocator(allocator) {
+    // TODO: implement push constants
+    pipelineLayoutCI.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    pipelineLayoutCI.pushConstantRangeCount = 0;
+    pipelineLayoutCI.pPushConstantRanges = nullptr;
+  }
 
   PipelineBuilder& setVertexShader(const char* fileLocation) {
     deallocateShader(vertexShaderModule, vertexShaderFile);
@@ -74,6 +79,12 @@ public:
 
   PipelineBuilder& setRenderPass(VkRenderPass renderPass) {
     this->renderPass = renderPass;
+    return *this;
+  }
+
+  PipelineBuilder& setDescriptorSetLayout(VkDescriptorSetLayout* descriptorSetLayout) {
+    pipelineLayoutCI.setLayoutCount = 1; // descriptor set layouts
+    pipelineLayoutCI.pSetLayouts = descriptorSetLayout; // num descriptor set layouts
     return *this;
   }
 
@@ -143,14 +154,6 @@ public:
     viewportCI.scissorCount = 1;
     viewportCI.pScissors = &tmpScissor;
 
-    // TODO: Specify descriptor set layouts and push constants
-    VkPipelineLayoutCreateInfo pipelineLayoutCI{};
-    pipelineLayoutCI.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-    pipelineLayoutCI.setLayoutCount = 0; // descriptor set layouts
-    pipelineLayoutCI.pSetLayouts = nullptr; // num descriptor set layouts
-    pipelineLayoutCI.pushConstantRangeCount = 0;
-    pipelineLayoutCI.pPushConstantRanges = nullptr;
-
     if (vkCreatePipelineLayout(logicalDevice, &pipelineLayoutCI, allocator, outPipelineLayout) != VK_SUCCESS) {
       throw std::runtime_error("failed to create pipeline layout!");
     }
@@ -199,6 +202,7 @@ private:
   VkVertexInputAttributeDescription* vertexInputAttDescs = nullptr;
   VkPipelineVertexInputStateCreateInfo vertexInputStateCI{};
   VkPipelineInputAssemblyStateCreateInfo inputAssemblyStateCI{};
+  VkPipelineLayoutCreateInfo pipelineLayoutCI{};
 
   VkViewport viewport{};
   VkRect2D scissor{};
