@@ -7,38 +7,38 @@
 
 #pragma once
 
-#include "Platform.h"
+#include "KuringTypes.h"
 #include <vulkan/vulkan_core.h>
 
 struct VertexAttFormat {
-  uint32 offsetInBytes;
+  u32 offsetInBytes;
   VkFormat format;
 };
 
 struct VertexAttIndices {
-  uint32 sizeInBytes;
-  uint32 count;
+  u32 sizeInBytes;
+  u32 count;
   void* data;
 };
 
 struct VertexAtt {
-  uint32 strideInBytes;
-  uint32 sizeInBytes;
+  u32 strideInBytes;
+  u32 sizeInBytes;
   VertexAttFormat* attributeFormat;
-  uint32 attributeCount;
+  u32 attributeCount;
   VkPrimitiveTopology primitiveTopology;
   void* data;
   VertexAttIndices indices;
 };
 
 struct PosVertexAttDatum {
-  float32 position[3];
+  f32 position[3];
 };
 extern VertexAttFormat posVertexAttDatumFormat[];
 
 struct PosColVertexAttDatum {
-  float32 position[3];
-  float32 color[3];
+  f32 position[3];
+  f32 color[3];
 };
 extern VertexAttFormat posColVertexAttDatumFormat[];
 

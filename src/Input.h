@@ -1,6 +1,6 @@
 #pragma once
 
-#include "Platform.h"
+#include "KuringTypes.h"
 
 #define GLFW_INCLUDE_NONE // ensure GLFW doesn't load OpenGL headers
 #define GLFW_INCLUDE_VULKAN
@@ -10,14 +10,14 @@ typedef void (*WindowSizeCallback)(void);
 
 struct MouseCoord
 {
-  float64 x;
-  float64 y;
+  f64 x;
+  f64 y;
 };
 
 struct ControllerAnalogStick
 {
-  int16 x;
-  int16 y;
+  s16 x;
+  s16 y;
 };
 
 enum InputType
@@ -56,11 +56,11 @@ InputState getInputState(InputType key); // Note: for special use cases (ex: dou
 
 MouseCoord getMousePosition();
 MouseCoord getMouseDelta();
-float32 getMouseScrollY();
-int8 getControllerTriggerRaw_Left(); // NOTE: values range from 0 - 225 (255 minus trigger threshold)
-int8 getControllerTriggerRaw_Right(); // NOTE: values range from 0 - 225 (255 minus trigger threshold)
-float32 getControllerTrigger_Left(); // NOTE: values range from 0.0 - 1.0
-float32 getControllerTrigger_Right(); // NOTE: values range from 0.0 - 1.0
+f32 getMouseScrollY();
+s8 getControllerTriggerRaw_Left(); // NOTE: values range from 0 - 225 (255 minus trigger threshold)
+s8 getControllerTriggerRaw_Right(); // NOTE: values range from 0 - 225 (255 minus trigger threshold)
+f32 getControllerTrigger_Left(); // NOTE: values range from 0.0 - 1.0
+f32 getControllerTrigger_Right(); // NOTE: values range from 0.0 - 1.0
 Extent2D getWindowExtent();
 ControllerAnalogStick getControllerAnalogStickLeft();
 ControllerAnalogStick getControllerAnalogStickRight();
@@ -70,9 +70,9 @@ void enableCursor(bool enable);
 bool isCursorEnabled();
 bool isWindowFullscreen();
 bool isWindowMinimized();
-void toWindowedMode(uint32 width, uint32 height);
+void toWindowedMode(u32 width, u32 height);
 void toFullScreenMode();
-void toggleWindowSize(uint32 width, uint32 height);
+void toggleWindowSize(u32 width, u32 height);
 
 // NOTE: Call with NULL to unsubscribe
 void subscribeWindowSizeCallback(WindowSizeCallback callback);

@@ -1,6 +1,6 @@
 #include "GraphicsPipelineBuilder.h"
 
-file_access VkPipelineRasterizationStateCreateInfo defaultRasterizationCI {
+internal_access VkPipelineRasterizationStateCreateInfo defaultRasterizationCI {
 VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO, // sType
 nullptr, // pNext
 0, // flags
@@ -16,7 +16,7 @@ VK_FALSE, // depth bias enabled
 1.0f // line width
 };
 
-file_access VkPipelineMultisampleStateCreateInfo defaultMultisampleCI{
+internal_access VkPipelineMultisampleStateCreateInfo defaultMultisampleCI{
 VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO, // sType
 nullptr, // pNext
 0, // flags
@@ -28,7 +28,7 @@ VK_FALSE, // alpha to coverage enabled
 VK_FALSE // alpha to one enabled
 };
 
-file_access VkPipelineColorBlendAttachmentState defaultColorBlendAttachment{
+internal_access VkPipelineColorBlendAttachmentState defaultColorBlendAttachment{
 VK_FALSE, // blend enabled
 VK_BLEND_FACTOR_ONE, // src color blend factor
 VK_BLEND_FACTOR_ZERO, // dst color blend factor
@@ -39,7 +39,7 @@ VK_BLEND_OP_ADD, // alpha blend op
 VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT // color write mask
 };
 
-file_access VkPipelineColorBlendStateCreateInfo defaultColorBlend{
+internal_access VkPipelineColorBlendStateCreateInfo defaultColorBlend{
 VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO, // sType
 nullptr, // pNext
 0, // flags
@@ -51,7 +51,7 @@ VK_LOGIC_OP_COPY, // logical operator
 };
 
 GraphicsPipelineBuilder::GraphicsPipelineBuilder(VkDevice logicalDevice, VkAllocationCallbacks* allocator) : logicalDevice(logicalDevice), allocator(allocator) {
-  // TODO: implement push constants
+  // TODO: push constants
   pipelineLayoutCI.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
   pipelineLayoutCI.pushConstantRangeCount = 0;
   pipelineLayoutCI.pPushConstantRanges = nullptr;
@@ -65,8 +65,8 @@ GraphicsPipelineBuilder::GraphicsPipelineBuilder(VkDevice logicalDevice, VkAlloc
 
 GraphicsPipelineBuilder::~GraphicsPipelineBuilder()
 {
-  deallocateShader(vertexShaderModule, vertexShaderFile);
-  deallocateShader(fragmentShaderModule, fragmentShaderFile);
+  deallocateShader(vertexShaderModule);
+  deallocateShader(fragmentShaderModule);
   delete[] vertexInputAttDescs;
 }
 
@@ -82,7 +82,7 @@ void GraphicsPipelineBuilder::build(VkPipeline* outPipeline, VkPipelineLayout* o
     tmpScissor = scissor;
   } else {
     tmpScissor.offset = { 0, 0 };
-    tmpScissor.extent = { (uint32)viewport.width, (uint32)viewport.height };
+    tmpScissor.extent = {(u32)viewport.width, (u32)viewport.height };
   }
 
   VkPipelineViewportStateCreateInfo viewportCI{};
@@ -127,33 +127,39 @@ void GraphicsPipelineBuilder::build(VkPipeline* outPipeline, VkPipelineLayout* o
 
 GraphicsPipelineBuilder& GraphicsPipelineBuilder::setVertexShader(const char* fileLocation)
 {
-  deallocateShader(vertexShaderModule, vertexShaderFile);
-  setShader(fileLocation, VK_SHADER_STAGE_VERTEX_BIT, vertexShaderModule, vertexShaderFile, vertexShaderStageCI);
+  deallocateShader(vertexShaderModule);
+  setShader(fileLocation, VK_SHADER_STAGE_VERTEX_BIT, vertexShaderModule, vertexShaderStageCI);
   return *this;
 }
 
-void GraphicsPipelineBuilder::deallocateShader(VkShaderModule& shaderModule, char* shaderFile)
+GraphicsPipelineBuilder& GraphicsPipelineBuilder::setFragmentShader(const char* fileLocation)
 {
-  if(shaderFile != nullptr) {
+  deallocateShader(fragmentShaderModule);
+  setShader(fileLocation, VK_SHADER_STAGE_FRAGMENT_BIT, fragmentShaderModule, fragmentShaderStageCI);
+  return *this;
+}
+
+void GraphicsPipelineBuilder::deallocateShader(VkShaderModule& shaderModule)
+{
+  if(shaderModule != VK_NULL_HANDLE) {
     vkDestroyShaderModule(logicalDevice, shaderModule, allocator);
-    delete[] shaderFile;
+    shaderModule = VK_NULL_HANDLE;
   }
-  shaderFile = nullptr;
 }
 
 GraphicsPipelineBuilder& GraphicsPipelineBuilder::setShader(const char* fileLocation, VkShaderStageFlagBits shaderStageFlag,
-                                                            VkShaderModule& shaderModule, char*& shaderFile,
+                                                            VkShaderModule& shaderModule,
                                                             VkPipelineShaderStageCreateInfo& shaderStageCreateInfo)
 {
-  uint32 shaderSize;
+  u32 shaderSize;
   readFile(fileLocation, &shaderSize, nullptr);
-  shaderFile = new char[shaderSize];
+  char* shaderFile = new char[shaderSize];
   readFile(fileLocation, &shaderSize, shaderFile);
 
   VkShaderModuleCreateInfo shaderModuleCI = {};
   shaderModuleCI.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
   shaderModuleCI.codeSize = shaderSize;
-  shaderModuleCI.pCode = (const uint32*) shaderFile; // Note: there may be concerns with data alignment
+  shaderModuleCI.pCode = (const u32*) shaderFile; // Note: there may be concerns with data alignment
   if(vkCreateShaderModule(logicalDevice, &shaderModuleCI, allocator, &shaderModule) != VK_SUCCESS) {
     throw std::runtime_error("failed to create shader module!");
   }
@@ -162,6 +168,7 @@ GraphicsPipelineBuilder& GraphicsPipelineBuilder::setShader(const char* fileLoca
   shaderStageCreateInfo.stage = shaderStageFlag;
   shaderStageCreateInfo.module = shaderModule;
   shaderStageCreateInfo.pName = "main";
+  delete[] shaderFile;
   return *this;
 }
 
@@ -178,10 +185,10 @@ void GraphicsPipelineBuilder::verifyIntegrity()
   if(vertexInputAttDescs == nullptr) {
     throw std::runtime_error(errorTitle + "failed to supply vertex attributes!");
   }
-  if(vertexShaderFile == nullptr) {
+  if(vertexShaderModule == VK_NULL_HANDLE) {
     throw std::runtime_error(errorTitle + "failed to supply vertex shader!");
   }
-  if(fragmentShaderFile == nullptr) {
+  if(fragmentShaderModule == VK_NULL_HANDLE) {
     throw std::runtime_error(errorTitle + "failed to supply fragment shader!");
   }
   if(viewport.width <= 0 || viewport.height <= 0) {
@@ -192,14 +199,14 @@ void GraphicsPipelineBuilder::verifyIntegrity()
   }
 }
 
-GraphicsPipelineBuilder& GraphicsPipelineBuilder::setScissor(int32 offsetX, int32 offsetY, uint32 width, uint32 height)
+GraphicsPipelineBuilder& GraphicsPipelineBuilder::setScissor(s32 offsetX, s32 offsetY, u32 width, u32 height)
 {
   scissor.offset = { offsetX, offsetY};
   scissor.extent = { width, height };
   return *this;
 }
 
-GraphicsPipelineBuilder& GraphicsPipelineBuilder::setVertexAttributes(VertexAtt vertexAtt, uint32 bindingPoint)
+GraphicsPipelineBuilder& GraphicsPipelineBuilder::setVertexAttributes(VertexAtt vertexAtt, u32 bindingPoint)
 {
   vertexInputBindingDesc.binding = bindingPoint;
   vertexInputBindingDesc.stride = vertexAtt.strideInBytes;
@@ -208,7 +215,7 @@ GraphicsPipelineBuilder& GraphicsPipelineBuilder::setVertexAttributes(VertexAtt 
   if(vertexInputAttDescs != nullptr) { delete[] vertexInputAttDescs; }
 
   vertexInputAttDescs = new VkVertexInputAttributeDescription[vertexAtt.attributeCount];
-  for(uint32 i = 0; i < vertexAtt.attributeCount; ++i) {
+  for(u32 i = 0; i < vertexAtt.attributeCount; ++i) {
     vertexInputAttDescs[i].binding = bindingPoint;
     vertexInputAttDescs[i].location = i;
     vertexInputAttDescs[i].format = vertexAtt.attributeFormat[i].format;
@@ -228,27 +235,28 @@ GraphicsPipelineBuilder& GraphicsPipelineBuilder::setVertexAttributes(VertexAtt 
 }
 
 GraphicsPipelineBuilder&
-GraphicsPipelineBuilder::setViewport(float32 originX, float32 originY, float32 originZ, uint32 width, uint32 height,
-                                     float32 depth)
+GraphicsPipelineBuilder::setViewport(f32 originX, f32 originY, f32 originZ, u32 width, u32 height,
+                                     f32 depth)
 {
   viewport.x = originX;
   viewport.y = originY;
   viewport.minDepth = originZ;
-  viewport.width = (float32)width;
-  viewport.height = (float32)height;
+  viewport.width = (f32)width;
+  viewport.height = (f32)height;
   viewport.maxDepth = depth;
   return *this;
 }
 
 GraphicsPipelineBuilder&
-GraphicsPipelineBuilder::setDescriptorSetLayouts(VkDescriptorSetLayout* descriptorSetLayout, uint32 count)
+GraphicsPipelineBuilder::setDescriptorSetLayouts(VkDescriptorSetLayout* descriptorSetLayout, u32 count)
 {
   pipelineLayoutCI.setLayoutCount = count; // descriptor set layouts
   pipelineLayoutCI.pSetLayouts = descriptorSetLayout; // num descriptor set layouts
   return *this;
 }
 
-GraphicsPipelineBuilder& GraphicsPipelineBuilder::setFrontFace(VkFrontFace frontFace)
+GraphicsPipelineBuilder& GraphicsPipelineBuilder::
+setFrontFace(VkFrontFace frontFace)
 {
   frontFace = VK_FRONT_FACE_CLOCKWISE;
   return *this;
@@ -269,12 +277,5 @@ GraphicsPipelineBuilder& GraphicsPipelineBuilder::setPolygonMode(VkPolygonMode p
 GraphicsPipelineBuilder& GraphicsPipelineBuilder::setRenderPass(VkRenderPass renderPass)
 {
   this->renderPass = renderPass;
-  return *this;
-}
-
-GraphicsPipelineBuilder& GraphicsPipelineBuilder::setFragmentShader(const char* fileLocation)
-{
-  deallocateShader(fragmentShaderModule, fragmentShaderFile);
-  setShader(fileLocation, VK_SHADER_STAGE_FRAGMENT_BIT, fragmentShaderModule, fragmentShaderFile, fragmentShaderStageCI);
   return *this;
 }

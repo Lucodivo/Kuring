@@ -21,7 +21,7 @@
 #include <chrono>
 
 #include "VulkanApp.h"
-#include "Platform.h"
+#include "KuringTypes.h"
 #include "Util.h"
 #include "Models.h"
 #include "Input.h"
@@ -38,9 +38,9 @@ struct SwapChain {
     VkFormat format;
     VkExtent2D extent;
     VkImage* images;
-    uint32 imageCount;
+    u32 imageCount;
     VkImageView* imageViews;
-    uint32 framebufferCount;
+    u32 framebufferCount;
     VkFramebuffer* framebuffers;
 };
 
@@ -55,7 +55,7 @@ struct VulkanContext {
   VkPipeline graphicsPipeline;
   VkCommandPool graphicsCommandPool;
   VkCommandPool transferCommandPool;
-  uint32 commandBufferCount;
+  u32 commandBufferCount;
   VkCommandBuffer* commandBuffers;
   VkFence* commandBufferFences;
 
@@ -65,9 +65,9 @@ struct VulkanContext {
     VkDescriptorSetLayout descriptorSetLayout;
     VkDeviceMemory memory;
     VkBuffer buffer;
-    uint32* offsets;
-    uint32 count;
-    uint32 alignment;
+    u32* offsets;
+    u32 count;
+    u32 alignment;
   } uniformBuffers;
 
   struct {
@@ -92,8 +92,8 @@ struct VulkanContext {
       VkDeviceMemory memory;
       VkBuffer buffer;
       VkDeviceSize bufferOffset;
-      uint32 verticesOffset;
-      uint32 indicesOffset;
+      u32 verticesOffset;
+      u32 indicesOffset;
   } vertexAtt;
 };
 
@@ -116,7 +116,7 @@ VkResult initDebugUtilsMessengerEXT(
     VkDebugUtilsMessengerEXT* pDebugMessenger);
 void DestroyDebugUtilsMessengerEXT(VkInstance* instance, VkDebugUtilsMessengerEXT* debugMessenger, const VkAllocationCallbacks* pAllocator);
 void drawFrame(VulkanContext* vulkanContext);
-void getRequiredExtensions(const char ** extensions, uint32 *extensionCount);
+void getRequiredExtensions(const char ** extensions, u32 *extensionCount);
 void processKeyboardInput();
 void initFramebuffers(VulkanContext* vulkanContext);
 void destroyFramebuffers(VulkanContext* vulkanContext);
@@ -127,20 +127,19 @@ void initSwapChainCommandBuffers(VulkanContext* vulkanContext);
 void populateCommandBuffers(VulkanContext* vulkanContext);
 void initSwapChain(VulkanContext* vulkanContext, QueueFamilyIndices queueFamilyIndices);
 void initRenderPass(VkDevice* logicalDevice, VkFormat colorAttachmentFormat, VkRenderPass* renderPass);
-void initUniformBuffers(VulkanContext* vulkanContext);
 void initGraphicsPipeline(VulkanContext* vulkanContext);
 void initCommandPools(VulkanContext* vulkanContext, QueueFamilyIndices queueFamilyIndices);
 void prepareUniformBufferMemory(VulkanContext* vulkanContext);
 void initDescriptorPool(VulkanContext* vulkanContext);
 void initDescriptorSets(VulkanContext* vulkanContext);
 
-const uint32 INITIAL_VIEWPORT_WIDTH = 1200;
-const uint32 INITIAL_VIEWPORT_HEIGHT = 1200;
+const u32 INITIAL_VIEWPORT_WIDTH = 1200;
+const u32 INITIAL_VIEWPORT_HEIGHT = 1200;
 
-const uint32 TRANS_MATS_UNIFORM_BUFFER_BINDING_INDEX = 0;
+const u32 TRANS_MATS_UNIFORM_BUFFER_BINDING_INDEX = 0;
 
-const uint32 QUAD_VERTEX_INPUT_BINDING_INDEX = 0;
-const uint64 DEFAULT_FENCE_TIMEOUT = 100000000000;
+const u32 QUAD_VERTEX_INPUT_BINDING_INDEX = 0;
+const u64 DEFAULT_FENCE_TIMEOUT = 100000000000;
 
 #ifdef NOT_DEBUG
 bool32 enableValidationLayers = false;
@@ -240,16 +239,16 @@ void recreateSwapChain(VulkanContext* vulkanContext)
   // TODO: notify shaders uniforms
 }
 
-void updateUniformBuffer(VulkanContext* vulkanContext, uint32 index) {
+void updateUniformBuffer(VulkanContext* vulkanContext, u32 index) {
   local_access auto startTime = std::chrono::high_resolution_clock::now();
 
   auto currentTime = std::chrono::high_resolution_clock::now();
-  float32 time = std::chrono::duration<float, std::chrono::seconds::period>(currentTime - startTime).count();
+  f32 time = std::chrono::duration<float, std::chrono::seconds::period>(currentTime - startTime).count();
 
   TransMats ubo{};
   ubo.model = glm::rotate(glm::mat4(1.0f), time * glm::radians(90.0f), glm::vec3(0.0f, 0.0f, 1.0f));
   ubo.view = glm::lookAt(glm::vec3(2.0f, 2.0f, 2.0f), glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(0.0f, 0.0f, 1.0f));
-  ubo.proj = glm::perspective(glm::radians(45.0f), (float32)vulkanContext->swapChain.extent.width / vulkanContext->swapChain.extent.height, 0.1f, 10.0f);
+  ubo.proj = glm::perspective(glm::radians(45.0f), (f32)vulkanContext->swapChain.extent.width / vulkanContext->swapChain.extent.height, 0.1f, 10.0f);
   void* uniformBufferMemoryPointer;
   vkMapMemory(vulkanContext->device.logical, vulkanContext->uniformBuffers.memory, vulkanContext->uniformBuffers.offsets[index], sizeof(ubo), 0, &uniformBufferMemoryPointer);
     memcpy(uniformBufferMemoryPointer, &ubo, sizeof(ubo));
@@ -258,7 +257,7 @@ void updateUniformBuffer(VulkanContext* vulkanContext, uint32 index) {
 
 void drawFrame(VulkanContext* vulkanContext)
 {
-  uint32 swapChainImageIndex; // index inside swapChain.images
+  u32 swapChainImageIndex; // index inside swapChain.images
   VkResult acquireResult = vkAcquireNextImageKHR(vulkanContext->device.logical,
                         vulkanContext->swapChain.handle,
                         UINT64_MAX,
@@ -338,7 +337,7 @@ void drawFrame(VulkanContext* vulkanContext)
  */
 void populateCommandBuffers(VulkanContext* vulkanContext) {
   // command buffer recording
-  for (uint32 i = 0; i < vulkanContext->commandBufferCount; ++i) {
+  for (u32 i = 0; i < vulkanContext->commandBufferCount; ++i) {
     VkCommandBufferBeginInfo commandBufferBeginInfo{};
     commandBufferBeginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     commandBufferBeginInfo.flags = 0;
@@ -411,10 +410,10 @@ void populateCommandBuffers(VulkanContext* vulkanContext) {
  *    - Create and specify queues that will be needed using the queue family indices stored when picking the physical device
  */
 void initLogicalDeviceAndQueues(VkDevice* logicalDevice, VkPhysicalDevice* physicalDevice, QueueFamilyIndices* queueFamilyIndices) {
-    const float32 queuePriority = 1.0f;
+    const f32 queuePriority = 1.0f;
     VkDeviceQueueCreateInfo queueCIs[2];
 
-    uint32 uniqueQueuesCount = 1;
+    u32 uniqueQueuesCount = 1;
     VkDeviceQueueCreateInfo graphicsQueueCI{};
     graphicsQueueCI.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
     graphicsQueueCI.queueFamilyIndex = queueFamilyIndices->graphics;
@@ -461,7 +460,7 @@ void initSurface(GLFWwindow* window, VkInstance* instance, VkSurfaceKHR* surface
 }
 
 // Callback for when screen changes size
-void framebuffer_size_callback(GLFWwindow* window, int32 width, int32 height)
+void framebuffer_size_callback(GLFWwindow* window, s32 width, s32 height)
 {
   // TODO: Do we even need this?
   //VulkanContext* vulkanContext = (VulkanContext*)glfwGetWindowUserPointer(window);
@@ -476,21 +475,21 @@ void initGLFW(GLFWwindow** window, VulkanContext* vulkanContext) {
   glfwSetFramebufferSizeCallback(*window, framebuffer_size_callback);
   GLFWmonitor* monitor = glfwGetPrimaryMonitor();
   const GLFWvidmode* mode = glfwGetVideoMode(monitor);
-  uint32 centeringUpperLeftX = (mode->width / 2) - (INITIAL_VIEWPORT_WIDTH / 2);
-  uint32 centeringUpperLeftY = (mode->height / 2) - (INITIAL_VIEWPORT_HEIGHT / 2);
+  u32 centeringUpperLeftX = (mode->width / 2) - (INITIAL_VIEWPORT_WIDTH / 2);
+  u32 centeringUpperLeftY = (mode->height / 2) - (INITIAL_VIEWPORT_HEIGHT / 2);
   glfwSetWindowMonitor(*window, NULL/*Null for windowed mode*/, centeringUpperLeftX, centeringUpperLeftY, INITIAL_VIEWPORT_WIDTH, INITIAL_VIEWPORT_HEIGHT, GLFW_DONT_CARE);
 }
 
 bool32 checkPhysicalDeviceExtensionSupport(VkPhysicalDevice* device){
-    uint32 extensionCount;
+    u32 extensionCount;
     vkEnumerateDeviceExtensionProperties(*device, nullptr, &extensionCount, nullptr);
     VkExtensionProperties* availableExtensions = new VkExtensionProperties[extensionCount];
     vkEnumerateDeviceExtensionProperties(*device, nullptr, &extensionCount, availableExtensions);
 
-    uint32 supportedExtensionsFound = 0;
-    for(uint32 desiredExtensionIndex = 0; desiredExtensionIndex < ArrayCount(DEVICE_EXTENSIONS); ++desiredExtensionIndex) {
+    u32 supportedExtensionsFound = 0;
+    for(u32 desiredExtensionIndex = 0; desiredExtensionIndex < ArrayCount(DEVICE_EXTENSIONS); ++desiredExtensionIndex) {
         if(supportedExtensionsFound < desiredExtensionIndex) break;
-        for(uint32 availableExtensionsIndex = 0; availableExtensionsIndex < extensionCount; ++availableExtensionsIndex) {
+        for(u32 availableExtensionsIndex = 0; availableExtensionsIndex < extensionCount; ++availableExtensionsIndex) {
             if(strcmp(DEVICE_EXTENSIONS[desiredExtensionIndex], availableExtensions[availableExtensionsIndex].extensionName) == 0) {
                 ++supportedExtensionsFound;
                 break;
@@ -503,10 +502,10 @@ bool32 checkPhysicalDeviceExtensionSupport(VkPhysicalDevice* device){
 }
 
 bool32 checkPhysicalDeviceSwapChainSupport(VkPhysicalDevice* physicalDevice, VkSurfaceKHR* surface) {
-    uint32 formatCount;
+    u32 formatCount;
     vkGetPhysicalDeviceSurfaceFormatsKHR(*physicalDevice, *surface, &formatCount, nullptr);
 
-    uint32 presentModeCount;
+    u32 presentModeCount;
     vkGetPhysicalDeviceSurfacePresentModesKHR(*physicalDevice, *surface, &presentModeCount, nullptr);
 
     // ensure we have any format and some present mode for use
@@ -528,14 +527,14 @@ void initSwapChain(VulkanContext* vulkanContext, QueueFamilyIndices queueFamilyI
     VkSurfaceCapabilitiesKHR surfaceCapabilities;
     vkGetPhysicalDeviceSurfaceCapabilitiesKHR(vulkanContext->device.physical, vulkanContext->surface, &surfaceCapabilities);
 
-    uint32 formatCount;
+    u32 formatCount;
     vkGetPhysicalDeviceSurfaceFormatsKHR(vulkanContext->device.physical, vulkanContext->surface, &formatCount, nullptr);
     VkSurfaceFormatKHR* surfaceFormats = new VkSurfaceFormatKHR[formatCount];
     vkGetPhysicalDeviceSurfaceFormatsKHR(vulkanContext->device.physical, vulkanContext->surface, &formatCount, surfaceFormats);
 
   VkSurfaceFormatKHR surfaceFormat = { SWAP_CHAIN_IMAGE_FORMAT, SWAP_CHAIN_IMAGE_COLOR_SPACE };
   bool imageFormatAndColorSpaceFound = false;
-  for (uint32 i = 0; i < formatCount; ++i) {
+  for (u32 i = 0; i < formatCount; ++i) {
       if (surfaceFormats[i].format == surfaceFormat.format && surfaceFormats[i].colorSpace == surfaceFormat.colorSpace) {
         imageFormatAndColorSpaceFound = true;
         break;
@@ -547,13 +546,13 @@ void initSwapChain(VulkanContext* vulkanContext, QueueFamilyIndices queueFamilyI
   
   vulkanContext->swapChain.format = surfaceFormat.format;
 
-    uint32 presentModeCount;
+    u32 presentModeCount;
     vkGetPhysicalDeviceSurfacePresentModesKHR(vulkanContext->device.physical, vulkanContext->surface, &presentModeCount, nullptr);
     VkPresentModeKHR* presentModes = new VkPresentModeKHR[presentModeCount];
     vkGetPhysicalDeviceSurfacePresentModesKHR(vulkanContext->device.physical, vulkanContext->surface, &presentModeCount, presentModes);
 
     VkPresentModeKHR selectedPresentMode = VK_PRESENT_MODE_FIFO_KHR; // guaranteed to be available
-    for(uint32 i = 0; i < presentModeCount; ++i) {
+    for(u32 i = 0; i < presentModeCount; ++i) {
         if(presentModes[i] == VK_PRESENT_MODE_MAILBOX_KHR) { // allows triple buffering
             selectedPresentMode = VK_PRESENT_MODE_MAILBOX_KHR;
             break;
@@ -569,7 +568,7 @@ void initSwapChain(VulkanContext* vulkanContext, QueueFamilyIndices queueFamilyI
       vulkanContext->swapChain.extent.height = clamp(minExtent.height, maxExtent.height, vulkanContext->windowExtent.height);
     }
 
-    uint32 imageCount = surfaceCapabilities.minImageCount + 1;
+    u32 imageCount = surfaceCapabilities.minImageCount + 1;
     if(surfaceCapabilities.maxImageCount != 0 // there is an image limit
        && surfaceCapabilities.maxImageCount < imageCount) { // our current count is above that limit
         imageCount = surfaceCapabilities.maxImageCount;
@@ -585,7 +584,7 @@ void initSwapChain(VulkanContext* vulkanContext, QueueFamilyIndices queueFamilyI
     swapChainCI.imageArrayLayers = 1; // 1 unless creating stereoscopic 3D application
     swapChainCI.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
 
-    uint32 createFamilyIndices[] = { queueFamilyIndices.graphics, queueFamilyIndices.present };
+    u32 createFamilyIndices[] = {queueFamilyIndices.graphics, queueFamilyIndices.present };
     if(createFamilyIndices[0] != createFamilyIndices[1]) {
         swapChainCI.imageSharingMode = VK_SHARING_MODE_CONCURRENT;
         swapChainCI.queueFamilyIndexCount = 2;
@@ -627,7 +626,7 @@ void pickPhysicalDevice(VulkanContext* vulkanContext) {
     VkSurfaceKHR surface = vulkanContext->surface;
 
     vulkanContext->device.physical = VK_NULL_HANDLE;
-    uint32 deviceCount = 0;
+    u32 deviceCount = 0;
     vkEnumeratePhysicalDevices(vulkanInstance, &deviceCount, nullptr);
 
     if(deviceCount == 0) {
@@ -640,7 +639,7 @@ void pickPhysicalDevice(VulkanContext* vulkanContext) {
 
     VkPhysicalDeviceProperties deviceProperties;
     VkPhysicalDeviceFeatures deviceFeatures;
-    for(uint32 i = 0; i < deviceCount; ++i) {
+    for(u32 i = 0; i < deviceCount; ++i) {
         VkPhysicalDevice potentialDevice = physicalDevices[i];
 
         vkGetPhysicalDeviceProperties(potentialDevice, &deviceProperties);
@@ -674,10 +673,10 @@ void pickPhysicalDevice(VulkanContext* vulkanContext) {
 // This is necessary as implementations can offer an arbitrary number of memory types with different
 // memory properties.
 // You can check http://vulkan.gpuinfo.org/ for details on different memory configurations
-uint32 getMemoryTypeIndex(VkPhysicalDeviceMemoryProperties const* deviceMemoryProperties, uint32 memoryTypeBits, VkMemoryPropertyFlags properties)
+u32 getMemoryTypeIndex(VkPhysicalDeviceMemoryProperties const* deviceMemoryProperties, u32 memoryTypeBits, VkMemoryPropertyFlags properties)
 {
     // Iterate over all memory types available for the device used in this example
-    for (uint32 i = 0; i < deviceMemoryProperties->memoryTypeCount; i++)
+    for (u32 i = 0; i < deviceMemoryProperties->memoryTypeCount; i++)
     {
         // memoryTypeBits is a bitmask and contains one bit set for every supported memory type for the resource.
         // Bit i is set if and only if the memory type i in the VkPhysicalDeviceMemoryProperties structure for
@@ -725,7 +724,7 @@ void prepareVertexAttributeMemory(VulkanContext* vulkanContext, VertexAtt vertex
     // - Delete the host visible (staging) buffer
     // - Use the device local buffers for rendering
 
-    uint32 totalBufferSize = vertexAtt.sizeInBytes + vertexAtt.indices.sizeInBytes;
+    u32 totalBufferSize = vertexAtt.sizeInBytes + vertexAtt.indices.sizeInBytes;
 
     // Create a host-visible buffer to copy the vertex data to (staging buffer)
     VkBufferCreateInfo hostVisibleVertexBufferInfo = {};
@@ -844,7 +843,7 @@ void initSyncObjects(VulkanContext* vulkanContext) {
        vkCreateSemaphore(vulkanContext->device.logical, &semaphoreCI, nullAllocator, &vulkanContext->semaphores.render) != VK_SUCCESS) {
             throw std::runtime_error("failed to create semaphores!");
     }
-    for(uint32 i = 0; i < vulkanContext->commandBufferCount; ++i) {
+    for(u32 i = 0; i < vulkanContext->commandBufferCount; ++i) {
         if (vkCreateFence(vulkanContext->device.logical, &fenceCI, nullAllocator, vulkanContext->commandBufferFences + i) != VK_SUCCESS) {
             throw std::runtime_error("failed to create fences!");
         }
@@ -871,10 +870,10 @@ void initDescriptorSetLayout(VulkanContext* vulkanContext) {
 
 void prepareUniformBufferMemory(VulkanContext* vulkanContext) {
   vulkanContext->uniformBuffers.count = vulkanContext->swapChain.imageCount;
-  uint32 uniformBufferDataSize = sizeof(TransMats);
-  uint32 totalBufferSize = uniformBufferDataSize * vulkanContext->uniformBuffers.count;
+  u32 uniformBufferDataSize = sizeof(TransMats);
+  u32 totalBufferSize = uniformBufferDataSize * vulkanContext->uniformBuffers.count;
 
-  vulkanContext->uniformBuffers.offsets = new uint32[vulkanContext->uniformBuffers.count];
+  vulkanContext->uniformBuffers.offsets = new u32[vulkanContext->uniformBuffers.count];
 
   // Create a host-visible buffer to copy the vertex data to (staging buffer)
   VkBufferCreateInfo uniformBufferBufferInfo = {};
@@ -887,9 +886,9 @@ void prepareUniformBufferMemory(VulkanContext* vulkanContext) {
   VkMemoryRequirements uniformBufferMemReqs;
   vkGetBufferMemoryRequirements(vulkanContext->device.logical, vulkanContext->uniformBuffers.buffer, &uniformBufferMemReqs);
 
-  vulkanContext->uniformBuffers.alignment = (uint32)max(uniformBufferMemReqs.alignment, vulkanContext->device.minUniformBufferOffsetAlignment);
-  uint32 alignmentsPerData = (uniformBufferDataSize + vulkanContext->uniformBuffers.alignment - 1) / vulkanContext->uniformBuffers.alignment;
-  uint32 offsetInterval = alignmentsPerData * vulkanContext->uniformBuffers.alignment;
+  vulkanContext->uniformBuffers.alignment = (u32)max(uniformBufferMemReqs.alignment, vulkanContext->device.minUniformBufferOffsetAlignment);
+  u32 alignmentsPerData = (uniformBufferDataSize + vulkanContext->uniformBuffers.alignment - 1) / vulkanContext->uniformBuffers.alignment;
+  u32 offsetInterval = alignmentsPerData * vulkanContext->uniformBuffers.alignment;
   uniformBufferBufferInfo.size = offsetInterval * vulkanContext->uniformBuffers.count;
   vkDestroyBuffer(vulkanContext->device.logical, vulkanContext->uniformBuffers.buffer, nullAllocator);
   vkCreateBuffer(vulkanContext->device.logical, &uniformBufferBufferInfo, nullAllocator, &vulkanContext->uniformBuffers.buffer);
@@ -903,7 +902,7 @@ void prepareUniformBufferMemory(VulkanContext* vulkanContext) {
   vkAllocateMemory(vulkanContext->device.logical, &uniformBufferMemAllocInfo, nullAllocator, &vulkanContext->uniformBuffers.memory);
   vkBindBufferMemory(vulkanContext->device.logical, vulkanContext->uniformBuffers.buffer, vulkanContext->uniformBuffers.memory, 0/*memory offset*/);
 
-  for(uint32 i = 0; i < vulkanContext->uniformBuffers.count; ++i) {
+  for(u32 i = 0; i < vulkanContext->uniformBuffers.count; ++i) {
     vulkanContext->uniformBuffers.offsets[i] = i * offsetInterval;
   }
 }
@@ -1013,7 +1012,7 @@ void initVulkanInstance(VkInstance* vulkanInstance, VkDebugUtilsMessengerEXT* de
     instanceCI.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
     instanceCI.pApplicationInfo = &appInfo;
 
-    uint32 extensionsCount;
+    u32 extensionsCount;
     getRequiredExtensions(nullptr, &extensionsCount);
     const char** extensions = new const char*[extensionsCount];
     getRequiredExtensions(extensions, &extensionsCount);
@@ -1052,18 +1051,18 @@ void initVulkanInstance(VkInstance* vulkanInstance, VkDebugUtilsMessengerEXT* de
 }
 
 bool32 checkValidationLayerSupport() {
-    uint32 layerCount;
+    u32 layerCount;
     vkEnumerateInstanceLayerProperties(&layerCount, nullptr);
 
     VkLayerProperties* availableLayers = new VkLayerProperties[layerCount];
     vkEnumerateInstanceLayerProperties(&layerCount, availableLayers);
 
     bool32 layersFound = false;
-    for (uint32 i = 0; i < ArrayCount(VALIDATION_LAYERS); i++) {
+    for (u32 i = 0; i < ArrayCount(VALIDATION_LAYERS); i++) {
         layersFound = false;
 
         const char* validationLayer = VALIDATION_LAYERS[i];
-        for (uint32 j = 0; j < layerCount; j++) {
+        for (u32 j = 0; j < layerCount; j++) {
             char* availableLayer = availableLayers[j].layerName;
             if (strcmp(validationLayer, availableLayer) == 0) {
                 layersFound = true;
@@ -1080,8 +1079,8 @@ bool32 checkValidationLayerSupport() {
     return layersFound;
 }
 
-void getRequiredExtensions(const char ** extensions, uint32 *extensionCount) {
-    uint32 glfwExtensionCount;
+void getRequiredExtensions(const char ** extensions, u32 *extensionCount) {
+    u32 glfwExtensionCount;
     const char** glfwExtensions = glfwGetRequiredInstanceExtensions(&glfwExtensionCount);
 
     *extensionCount = enableValidationLayers ? glfwExtensionCount + 1 : glfwExtensionCount;
@@ -1089,7 +1088,7 @@ void getRequiredExtensions(const char ** extensions, uint32 *extensionCount) {
     if(extensions == nullptr) return;
 
     // copy GLFW required extensions
-    for(uint32 i = 0; i < glfwExtensionCount; ++i) {
+    for(u32 i = 0; i < glfwExtensionCount; ++i) {
         extensions[i] = glfwExtensions[i];
     }
 
@@ -1132,13 +1131,13 @@ static VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(
 }
 
 void printAvailableExtensions() {
-    uint32 extensionCount;
+    u32 extensionCount;
     vkEnumerateInstanceExtensionProperties(nullptr, &extensionCount, nullptr);
     VkExtensionProperties* extensions = new VkExtensionProperties[extensionCount];
     vkEnumerateInstanceExtensionProperties(nullptr, &extensionCount, extensions);
 
     std::cout << "available extensions:\n";
-    for(uint32 i = 0; i < extensionCount; i++) {
+    for(u32 i = 0; i < extensionCount; i++) {
         std::cout << '\t' << extensions[i].extensionName << '\n';
     }
 
@@ -1146,7 +1145,7 @@ void printAvailableExtensions() {
 }
 
 void destroyImageViews(VulkanContext* vulkanContext) {
-  for(uint32 i = 0; i < vulkanContext->swapChain.imageCount; ++i) {
+  for(u32 i = 0; i < vulkanContext->swapChain.imageCount; ++i) {
     vkDestroyImageView(vulkanContext->device.logical, vulkanContext->swapChain.imageViews[i], nullAllocator);
   }
 }
@@ -1169,7 +1168,7 @@ void cleanup(GLFWwindow* window, VulkanContext* vulkanContext) {
     destroyFramebuffers(vulkanContext);
     destroyImageViews(vulkanContext);
 
-    for(uint32 i = 0; i < vulkanContext->commandBufferCount; ++i) {
+    for(u32 i = 0; i < vulkanContext->commandBufferCount; ++i) {
         vkDestroyFence(device, vulkanContext->commandBufferFences[i], nullAllocator);
     }
     vkDestroySemaphore(device, vulkanContext->semaphores.render, nullAllocator);
@@ -1203,7 +1202,7 @@ void cleanup(GLFWwindow* window, VulkanContext* vulkanContext) {
 
 void destroyFramebuffers(VulkanContext* vulkanContext)
 {
-  for(uint32 i = 0; i < vulkanContext->swapChain.framebufferCount; ++i) {
+  for(u32 i = 0; i < vulkanContext->swapChain.framebufferCount; ++i) {
     vkDestroyFramebuffer(vulkanContext->device.logical, vulkanContext->swapChain.framebuffers[i], nullAllocator);
   }
 }
@@ -1217,7 +1216,7 @@ void initFramebuffers(VulkanContext* vulkanContext)
   swapChain->framebufferCount = swapChain->imageCount;
   swapChain->framebuffers = new VkFramebuffer[swapChain->framebufferCount];
 
-  for (uint32 i = 0; i < swapChain->framebufferCount; ++i) {
+  for (u32 i = 0; i < swapChain->framebufferCount; ++i) {
     VkFramebufferCreateInfo framebufferCI{};
     framebufferCI.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
     framebufferCI.renderPass = vulkanContext->renderPass;
@@ -1261,7 +1260,7 @@ void initSwapChainCommandBuffers(VulkanContext* vulkanContext)
 void initImageViews(VkDevice* logicalDevice, SwapChain* swapChain)
 {
   swapChain->imageViews = new VkImageView[swapChain->imageCount];
-  for(uint32 i = 0; i < swapChain->imageCount; ++i) {
+  for(u32 i = 0; i < swapChain->imageCount; ++i) {
     VkImageViewCreateInfo imageViewCI{};
     imageViewCI.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
     imageViewCI.image = swapChain->images[i];
@@ -1291,7 +1290,7 @@ void initImageViews(VkDevice* logicalDevice, SwapChain* swapChain)
  */
 void initRenderPass(VkDevice* logicalDevice, VkFormat colorAttachmentFormat, VkRenderPass* renderPass)
 {
-  const uint32 colorAttachmentIndex = 0;
+  const u32 colorAttachmentIndex = 0;
   VkAttachmentDescription attachmentDescs[1];
 
   attachmentDescs[colorAttachmentIndex].format = colorAttachmentFormat;

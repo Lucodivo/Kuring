@@ -1,7 +1,7 @@
 #include "Models.h"
 
-const uint32 quadIndexData[] = {0, 1, 2,
-                                0, 3, 1};
+const u32 quadIndexData[] = {0, 1, 2,
+                             0, 3, 1};
 const VertexAttIndices quadIndices {
         sizeof(quadIndexData),
         ArrayCount(quadIndexData),
@@ -9,12 +9,12 @@ const VertexAttIndices quadIndices {
 };
 
 VertexAttFormat posVertexAttDatumFormat[]{
-        { (uint32)offsetof(PosVertexAttDatum, position), VK_FORMAT_R32G32B32_SFLOAT }
+        { (u32)offsetof(PosVertexAttDatum, position), VK_FORMAT_R32G32B32_SFLOAT }
 };
 
 VertexAttFormat posColVertexAttDatumFormat[]{
-        { (uint32)offsetof(PosColVertexAttDatum, position), VK_FORMAT_R32G32B32_SFLOAT },
-        { (uint32)offsetof(PosColVertexAttDatum, color), VK_FORMAT_R32G32B32_SFLOAT },
+        { (u32)offsetof(PosColVertexAttDatum, position), VK_FORMAT_R32G32B32_SFLOAT },
+        { (u32)offsetof(PosColVertexAttDatum, color),    VK_FORMAT_R32G32B32_SFLOAT },
 };
 
 const PosColVertexAttDatum quadPosColVertexAttData[] =
@@ -79,8 +79,8 @@ const PosColVertexAttDatum triangleVertexAttData[] =
                         {  0.0f,  0.0f,  1.0f }
                 }
         };
-const uint32 triangleVertexAttCount = ArrayCount(triangleVertexAttData);
-const uint32 triangleVertexAttDataSize = ArrayCount(triangleVertexAttData) * sizeof(PosColVertexAttDatum);
-const uint32 triangleIndexData[] = { 0, 1, 2};
-const uint32 triangleIndexCount = ArrayCount(triangleIndexData);
-const uint32 triangleIndexDataSize = (triangleIndexCount) * sizeof(uint32);
+const u32 triangleVertexAttCount = ArrayCount(triangleVertexAttData);
+const u32 triangleVertexAttDataSize = ArrayCount(triangleVertexAttData) * sizeof(PosColVertexAttDatum);
+const u32 triangleIndexData[] = {0, 1, 2};
+const u32 triangleIndexCount = ArrayCount(triangleIndexData);
+const u32 triangleIndexDataSize = (triangleIndexCount) * sizeof(u32);

@@ -1,18 +1,24 @@
-### NOTE: THIS FILE IS ONLY USED TO ALLOW CLION TO UNDERSTAND PROJECT STRUCTURE
 cmake_minimum_required (VERSION 3.5)
 project (Kuring)
 
+# We need a CMAKE_DIR with some code to find external dependencies
+set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_SOURCE_DIR}/cmake/")
+
 set(LIB_DIR "C:/developer/dependencies/libs")
 set(INCL_DIR "C:/developer/dependencies/include")
-
-if(MSVC)
-    add_compile_options(/W3)
-else ()
-    add_compile_options(-Wall -Wall -Wpedantic)
-endif()
+set(EXT_DIR "${CMAKE_SOURCE_DIR}/external")
 
 # Add .lib files
-link_directories(${LIB_DIR})
+link_directories(
+        ${LIB_DIR}
+)
+
+# Define the include DIRs
+include_directories(
+        ${INCL_DIR}
+        ${EXT_DIR}
+        ${EXT_DIR}/glm
+)
 
 # project source files
 file(GLOB_RECURSE SOURCE_FILES
@@ -30,25 +36,20 @@ file(GLOB IMGUI_SOURCE_FILES
 file(GLOB IMGUI_HEADER_FILES
         ${INCL_DIR}/imgui/*.h)
 
+if(MSVC)
+    add_compile_options(/W3)
+else ()
+    add_compile_options(-Wall -Wall -Wpedantic)
+endif()
+
 # Define the executable
 add_executable(${PROJECT_NAME} ${HEADER_FILES} ${SOURCE_FILES} ${IMGUI_HEADER_FILES} ${IMGUI_SOURCE_FILES})
 
-# We need a CMAKE_DIR with some code to find external dependencies
-set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_SOURCE_DIR}/cmake/")
-
-# STB_IMAGE
-add_library(stb_image "${LIB_DIR}/stb_image.cpp")
-
 # GLAD
-add_library(glad "${LIB_DIR}/glad.c")
+add_library(glad "${EXT_DIR}/glad/glad.c")
 
 # Put all libraries into a variable
-set(LIBS assimpd freetype stb_image glad glfw3-x64-d vulkan-1)
-
-# Define the include DIRs
-include_directories(
-        ${INCL_DIR}
-)
+set(LIBS assimp freetype glad glfw3-x64-d vulkan-1)
 
 # Define the link libraries
 target_link_libraries(${PROJECT_NAME} ${LIBS})

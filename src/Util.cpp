@@ -3,9 +3,9 @@
 #include <time.h>
 #include <fstream>
 
-void swap(float32* a, float32* b)
+void swap(f32* a, f32* b)
 {
-  float32 tmp = *a;
+  f32 tmp = *a;
   *a = *b;
   *b = tmp;
 }
@@ -19,12 +19,12 @@ glm::mat4& reverseZ(glm::mat4& mat)
   return mat;
 }
 
-float32 getTime() {
+f32 getTime() {
   clock_t time = clock();
-  return (float32)time / CLOCKS_PER_SEC;
+  return (f32)time / CLOCKS_PER_SEC;
 }
 
-void readFile(const char* filename, uint32* fileSize, char* fileBuffer) {
+void readFile(const char* filename, u32* fileSize, char* fileBuffer) {
   // Read at end to get file size
   std::ifstream file(filename, std::ios::ate | std::ios::binary);
 
@@ -32,7 +32,7 @@ void readFile(const char* filename, uint32* fileSize, char* fileBuffer) {
     throw std::runtime_error(std::string("failed to open file:") + filename);
   }
 
-  *fileSize = (uint32) file.tellg();
+  *fileSize = (u32) file.tellg();
 
   if(fileBuffer != nullptr) {
     file.seekg(0);

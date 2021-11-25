@@ -1,7 +1,7 @@
 #include "VulkanUtil.h"
 
 bool32 findQueueFamilies(VkSurfaceKHR surface, VkPhysicalDevice physicalDevice, QueueFamilyIndices* queueFamilyIndices) {
-  uint32 queueFamilyCount = 0;
+  u32 queueFamilyCount = 0;
   vkGetPhysicalDeviceQueueFamilyProperties(physicalDevice, &queueFamilyCount, nullptr);
 
   VkQueueFamilyProperties* queueFamilies = new VkQueueFamilyProperties[queueFamilyCount];
@@ -10,7 +10,7 @@ bool32 findQueueFamilies(VkSurfaceKHR surface, VkPhysicalDevice physicalDevice, 
   bool32 present = false;
   bool32 graphics = false;
   bool32 transfer = false;
-  for (uint32 i = 0; i < queueFamilyCount; ++i) {
+  for (u32 i = 0; i < queueFamilyCount; ++i) {
     if(!present) {
       VkBool32 supportsPresentation = VK_FALSE;
       vkGetPhysicalDeviceSurfaceSupportKHR(physicalDevice, i, surface, &supportsPresentation);

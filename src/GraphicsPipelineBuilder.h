@@ -1,7 +1,7 @@
 #pragma once
 
 #include <vulkan/vulkan.hpp>
-#include "Platform.h"
+#include "KuringTypes.h"
 #include "Util.h"
 #include "Models.h"
 
@@ -17,10 +17,10 @@ public:
   GraphicsPipelineBuilder& setPolygonMode(VkPolygonMode polygonMode);
   GraphicsPipelineBuilder& setCullMode(VkCullModeFlags cullModeFlags);
   GraphicsPipelineBuilder& setFrontFace(VkFrontFace frontFace);
-  GraphicsPipelineBuilder& setDescriptorSetLayouts(VkDescriptorSetLayout* descriptorSetLayout, uint32 count);
-  GraphicsPipelineBuilder& setViewport(float32 originX, float32 originY, float32 originZ, uint32 width, uint32 height, float32 depth);
-  GraphicsPipelineBuilder& setVertexAttributes(VertexAtt vertexAtt, uint32 bindingPoint);
-  GraphicsPipelineBuilder& setScissor(int32 offsetX, int32 offsetY, uint32 width, uint32 height);
+  GraphicsPipelineBuilder& setDescriptorSetLayouts(VkDescriptorSetLayout* descriptorSetLayout, u32 count);
+  GraphicsPipelineBuilder& setViewport(f32 originX, f32 originY, f32 originZ, u32 width, u32 height, f32 depth);
+  GraphicsPipelineBuilder& setVertexAttributes(VertexAtt vertexAtt, u32 bindingPoint);
+  GraphicsPipelineBuilder& setScissor(s32 offsetX, s32 offsetY, u32 width, u32 height);
 
   void build(VkPipeline* outPipeline, VkPipelineLayout* outPipelineLayout);
 
@@ -29,11 +29,9 @@ private:
   VkDevice logicalDevice = VK_NULL_HANDLE;
 
   VkPipelineShaderStageCreateInfo vertexShaderStageCI{};
-  VkShaderModule vertexShaderModule{};
-  char* vertexShaderFile = nullptr;
+  VkShaderModule vertexShaderModule = VK_NULL_HANDLE;
   VkPipelineShaderStageCreateInfo fragmentShaderStageCI{};
-  VkShaderModule fragmentShaderModule{};
-  char* fragmentShaderFile = nullptr;
+  VkShaderModule fragmentShaderModule = VK_NULL_HANDLE;
 
   VkVertexInputBindingDescription vertexInputBindingDesc{};
   VkVertexInputAttributeDescription* vertexInputAttDescs = nullptr;
@@ -51,6 +49,6 @@ private:
   VkRenderPass renderPass = VK_NULL_HANDLE;
 
   void verifyIntegrity();
-  GraphicsPipelineBuilder& setShader(const char* fileLocation, VkShaderStageFlagBits shaderStageFlag, VkShaderModule& shaderModule, char*& shaderFile, VkPipelineShaderStageCreateInfo& shaderStageCreateInfo);
-  void deallocateShader(VkShaderModule& shaderModule, char* shaderFile);
+  GraphicsPipelineBuilder& setShader(const char* fileLocation, VkShaderStageFlagBits shaderStageFlag, VkShaderModule& shaderModule, VkPipelineShaderStageCreateInfo& shaderStageCreateInfo);
+  void deallocateShader(VkShaderModule& shaderModule);
 };
